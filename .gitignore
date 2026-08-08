@@ -1,0 +1,17 @@
+.DS_Store
+node_modules/
+dist/
+.wrangler/
+workers/api/worker-configuration.d.ts
+.dev.vars
+.env
+.env.*
+!.env.example
+.build/
+.module-cache/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/

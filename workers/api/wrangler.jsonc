@@ -1,0 +1,28 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "spellbook-api",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-08-05",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"workers_dev": true,
+	"observability": {
+		"enabled": true,
+		"logs": {
+			"head_sampling_rate": 1
+		},
+		"traces": {
+			"enabled": true,
+			"head_sampling_rate": 0.05
+		}
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "spellbook",
+			"database_id": "d052db5f-72c5-45fc-a72a-6869ab4ac6f9",
+			"migrations_dir": "migrations"
+		}
+	]
+}

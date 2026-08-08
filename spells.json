@@ -1,0 +1,52 @@
+{
+  "spells": [
+    {
+      "description": "Keep a JSON registry and its companion markdown files synchronized across app, API, and migration boundaries.",
+      "file": "spells/file-backed-registry-migrations.md",
+      "name": "File-backed registry migrations",
+      "tags": [
+        "migration",
+        "review"
+      ]
+    },
+    {
+      "description": "Separate anonymous public aggregate counts from authenticated current-user reaction state.",
+      "file": "spells/public-aggregate-personalization.md",
+      "name": "Public aggregate personalization",
+      "tags": [
+        "api",
+        "review"
+      ]
+    },
+    {
+      "description": "Verify production code deployment and database migrations are aligned before diagnosing schema errors.",
+      "file": "spells/deploy-schema-alignment.md",
+      "name": "Deploy schema alignment",
+      "tags": [
+        "deployment",
+        "migration",
+        "review"
+      ]
+    },
+    {
+      "description": "Replace file-target placeholders with the selected instruction file path so registry paths anchor correctly.",
+      "file": "spells/instruction-path-anchoring.md",
+      "name": "Instruction path anchoring",
+      "tags": [
+        "agent",
+        "files",
+        "review"
+      ]
+    },
+    {
+      "description": "A simple test spell for verifying local registry loading and markdown file hydration.",
+      "file": "spells/test-spell.md",
+      "name": "Test spell",
+      "tags": [
+        "review",
+        "test"
+      ]
+    }
+  ],
+  "version": 1
+}

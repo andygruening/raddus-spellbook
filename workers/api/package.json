@@ -1,0 +1,20 @@
+{
+  "name": "@raddus-spellbook/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --persist-to ./.wrangler/state --port 8787",
+    "deploy": "wrangler deploy --minify",
+    "typegen": "wrangler types",
+    "check": "npm run typegen && tsc --noEmit",
+    "test": "vitest run",
+    "migrate:local": "wrangler d1 migrations apply spellbook --local",
+    "migrate:remote": "wrangler d1 migrations apply spellbook --remote"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.119.0"
+  }
+}

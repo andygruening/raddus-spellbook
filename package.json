@@ -1,0 +1,19 @@
+{
+  "name": "raddus-spellbook",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "workers/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "check": "npm run check -w workers/api && npm run check -w apps/web",
+    "test": "npm run test -w workers/api",
+    "dev:api": "npm run dev -w workers/api",
+    "dev:web": "npm run dev -w apps/web",
+    "build:web": "npm run build -w apps/web"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}
