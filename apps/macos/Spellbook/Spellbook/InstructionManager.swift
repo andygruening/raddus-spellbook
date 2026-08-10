@@ -56,6 +56,19 @@ enum InstructionManager {
         }
     }
 
+    static func removeManagedBlock(from targetInstructionURL: URL) throws {
+        guard FileManager.default.fileExists(atPath: targetInstructionURL.path(percentEncoded: false)) else {
+            return
+        }
+
+        let existingContent = try String(contentsOf: targetInstructionURL, encoding: .utf8)
+        let nextContent = try contentByRemovingManagedBlock(from: existingContent)
+
+        if nextContent != existingContent {
+            try nextContent.write(to: targetInstructionURL, atomically: true, encoding: .utf8)
+        }
+    }
+
     private static func targetInstructionURL(from selectedURL: URL, preferredFileName: String) throws -> URL {
         if selectedURL.spellbookIsDirectory {
             for fileName in supportedFiles {
@@ -97,6 +110,30 @@ enum InstructionManager {
         return content.replacingCharacters(in: start.lowerBound..<end.upperBound, with: block)
     }
 
+    private static func contentByRemovingManagedBlock(from content: String) throws -> String {
+        guard
+            let start = content.range(of: startMarker),
+            let end = content.range(of: endMarker)
+        else {
+            if content.contains(startMarker) || content.contains(endMarker) {
+                throw SpellbookError.message("The instruction file has an incomplete Spellbook block.")
+            }
+
+            return content
+        }
+
+        guard start.lowerBound < end.upperBound else {
+            throw SpellbookError.message("The instruction file has an invalid Spellbook block.")
+        }
+
+        var nextContent = content.replacingCharacters(in: start.lowerBound..<end.upperBound, with: "")
+        if nextContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            nextContent = ""
+        }
+
+        return nextContent
+    }
+
     private static func managedBlock(targetInstructionURL: URL) -> String {
         managedBlockTemplate.replacingOccurrences(
             of: fileTargetTag,
@@ -107,7 +144,7 @@ enum InstructionManager {
     private static var managedBlockTemplate: String {
         """
         \(startMarker)
-        ## Spellbook Review Registry
+        ## Spellbook Instruction Registry
 
         Selected instruction file target: FILE_TARGET
 
@@ -116,21 +153,33 @@ enum InstructionManager {
         1. Query installed spells before and during the work.
            Treat the selected target directory's spells.json like a local MCP server or instruction registry. Resolve it relative to the directory that contains FILE_TARGET, not relative to the project root or current working directory.
 
-           Read spells.json as an index first. Inspect each spell's name, description, and tags to decide whether it may be relevant to the current task. Do not eagerly read every spell markdown file. When a spell looks useful, read its referenced file path, usually spells/<spell>.md, from the same selected target directory and apply that instruction.
+           Read spells.json as an index first. Inspect each spell's trigger first, then its name, description, and tags if more context is needed, to decide whether it should activate for the current task. Do not eagerly read every spell markdown file. When a spell's trigger matches the current task, read its referenced file path, usually spells/<spell>.md, from the same selected target directory and apply that instruction.
+
+           Staged entries are review-only. Do not read or activate spells-staging.json during task execution.
 
         2. Track new reusable instructions while working.
-           When you identify a durable review instruction, review category, review rule, or reusable feedback pattern, write a staged index entry to spells-staging.json in the selected target directory, and write the full markdown instructions to spells/<spell>.md under that same directory.
+           When you identify a durable instruction, workflow convention, project setup requirement, review rule, or reusable feedback pattern, write a staged index entry to spells-staging.json in the selected target directory, and write the full markdown instructions to a new spells/<spell>.md file under that same directory. Capture broadly useful instructions, not only review guidance; for example, a preference that web apps should be set up so they are deployable to Cloudflare is a valid spell.
+
+           During capture, do not modify spells.json and do not overwrite existing installed spell files unless explicitly asked.
 
         Keep spells.json, spells-staging.json, and spells-archive.json valid JSON:
 
         ```json
         {
           "version": 1,
-          "spells": []
+          "spells": [
+            {
+              "name": "Cloudflare-deployable web apps",
+              "description": "Set up web apps so they can be deployed to Cloudflare.",
+              "trigger": "Use when building or restructuring a web app, site, dashboard, or frontend tool that should be deployable.",
+              "tags": ["deployment", "cloudflare", "web"],
+              "file": "spells/cloudflare-deployable-web-apps.md"
+            }
+          ]
         }
         ```
 
-        Each spell index entry should include uid when available, name, description, tags, and file. Use a relative file value such as "spells/review-boundary.md". Keep the full durable instruction, trigger, safe path, and any supporting details in the referenced markdown file.
+        Each spell index entry should include uid when available, name, description, trigger, tags, and file. The trigger must describe when the agent should activate the spell. Use a relative file value such as "spells/cloudflare-deployable-web-apps.md". Keep the full durable instruction, trigger, safe path, and any supporting details in the referenced markdown file.
 
         Update existing matching spells instead of duplicating them. Do not include secrets, private customer data, or one-off observations.
         \(endMarker)

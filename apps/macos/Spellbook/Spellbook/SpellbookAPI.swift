@@ -3,7 +3,7 @@ import Foundation
 final class SpellbookAPI {
     static let shared = SpellbookAPI()
 
-    private let baseURL = URL(string: "https://spellbook-api.andygruening.workers.dev")!
+    private let baseURL = URL(string: "https://api.spellbook.raddus.dev/")!
     private let decoder = JSONDecoder.spellbook
     private let encoder = JSONEncoder()
 
@@ -40,6 +40,17 @@ final class SpellbookAPI {
             operation: .loadPublishedSpells
         )
         return response.spells
+    }
+
+    func publicSpell(uid: String, token: String? = nil) async throws -> Spell {
+        let response: SpellEnvelope = try await send(
+            path: "/api/spells/\(uid)",
+            method: "GET",
+            body: Optional<String>.none,
+            token: token,
+            operation: .loadPublishedSpells
+        )
+        return response.spell
     }
 
     func mySpells(token: String) async throws -> [Spell] {
@@ -84,6 +95,10 @@ final class SpellbookAPI {
             operation: starred ? .starSpell : .unstarSpell
         )
         return response.spell
+    }
+
+    func dynamicSpellLink(uid: String) -> URL {
+        baseURL.spellbookAPIURL(path: "/open/\(uid.spellbookPathComponent)")
     }
 
     private func send<ResponseBody: Decodable, RequestBody: Encodable>(
@@ -254,6 +269,7 @@ private struct PublishSpellBody: Encodable {
     var uid: String?
     var name: String
     var description: String
+    var trigger: String
     var tags: [String]
     var file: String
     var content: String
@@ -262,6 +278,7 @@ private struct PublishSpellBody: Encodable {
         uid = spell.uid
         name = spell.name
         description = spell.description
+        trigger = spell.trigger
         tags = spell.tags
         file = spell.file
         content = spell.content ?? ""
@@ -278,5 +295,13 @@ private extension URL {
         }
 
         return components?.url ?? self
+    }
+}
+
+private extension String {
+    var spellbookPathComponent: String {
+        var allowedCharacters = CharacterSet.urlPathAllowed
+        allowedCharacters.remove(charactersIn: "/")
+        return addingPercentEncoding(withAllowedCharacters: allowedCharacters) ?? self
     }
 }

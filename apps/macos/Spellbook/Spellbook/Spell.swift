@@ -4,6 +4,7 @@ struct Spell: Identifiable, Codable, Equatable {
     var uid: String?
     var name: String
     var description: String
+    var trigger: String
     var tags: [String]
     var file: String
     var content: String?
@@ -20,6 +21,7 @@ struct Spell: Identifiable, Codable, Equatable {
         uid: String? = nil,
         name: String,
         description: String,
+        trigger: String = "",
         tags: [String] = ["review"],
         file: String = "",
         content: String? = nil,
@@ -31,6 +33,7 @@ struct Spell: Identifiable, Codable, Equatable {
         self.uid = uid
         self.name = name
         self.description = description
+        self.trigger = trigger
         self.tags = tags
         self.file = file
         self.content = content
@@ -48,16 +51,19 @@ struct Spell: Identifiable, Codable, Equatable {
         let decodedDescription = try container.decodeIfPresent(String.self, forKey: .description)
             ?? container.decodeIfPresent(String.self, forKey: .requirement)
             ?? "Reusable review instruction."
+        let decodedContent = try container.decodeIfPresent(String.self, forKey: .content)
+        let decodedTrigger = try container.decodeIfPresent(String.self, forKey: .trigger)
+            ?? decodedContent.flatMap { Spell.trigger(from: $0) }
 
         uid = try container.decodeIfPresent(String.self, forKey: .uid)
             ?? container.decodeIfPresent(String.self, forKey: .remoteId)
         name = decodedName
         description = decodedDescription
+        trigger = decodedTrigger ?? ""
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? ["review"]
         file = try container.decodeIfPresent(String.self, forKey: .file)
             ?? "spells/\(Spell.slug(for: decodedName)).md"
-        content = try container.decodeIfPresent(String.self, forKey: .content)
-            ?? Spell.legacyMarkdown(from: container, name: decodedName)
+        content = decodedContent ?? Spell.legacyMarkdown(from: container, name: decodedName)
         ownerEmail = try container.decodeIfPresent(String.self, forKey: .ownerEmail)
         publishedAt = try container.decodeIfPresent(String.self, forKey: .publishedAt)
         starCount = try container.decodeIfPresent(Int.self, forKey: .starCount) ?? 0
@@ -69,6 +75,7 @@ struct Spell: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(uid, forKey: .uid)
         try container.encode(name, forKey: .name)
         try container.encode(description, forKey: .description)
+        try container.encode(trigger, forKey: .trigger)
         try container.encode(tags, forKey: .tags)
         try container.encode(file, forKey: .file)
     }
@@ -95,8 +102,39 @@ struct Spell: Identifiable, Codable, Equatable {
         return collapsed.isEmpty ? "spell" : collapsed
     }
 
+    static func trigger(from markdown: String) -> String? {
+        section(named: "Trigger", in: markdown)
+    }
+
     private func normalized(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func section(named heading: String, in markdown: String) -> String? {
+        var isCollecting = false
+        var lines: [String] = []
+
+        for line in markdown.components(separatedBy: .newlines) {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            if trimmedLine.hasPrefix("#") {
+                let headingText = String(trimmedLine.drop(while: { $0 == "#" }))
+                    .trimmingCharacters(in: .whitespaces)
+                if isCollecting {
+                    break
+                }
+                if headingText.caseInsensitiveCompare(heading) == .orderedSame {
+                    isCollecting = true
+                }
+                continue
+            }
+
+            if isCollecting {
+                lines.append(line)
+            }
+        }
+
+        let text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     private static func legacyMarkdown(from container: KeyedDecodingContainer<CodingKeys>, name: String) -> String? {

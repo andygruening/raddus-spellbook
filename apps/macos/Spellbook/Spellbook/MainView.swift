@@ -32,6 +32,7 @@ enum SpellbookPage: String, CaseIterable, Identifiable {
 
 struct MainView: View {
     @EnvironmentObject private var localStore: LocalSpellStore
+    @EnvironmentObject private var deepLinkModel: DeepLinkModel
     @State private var selection: SpellbookPage? = .local
 
     var body: some View {
@@ -77,6 +78,16 @@ struct MainView: View {
                 PublishedSpellsView()
             case .settings:
                 SettingsView()
+            }
+        }
+        .onAppear {
+            if deepLinkModel.pendingPublishedSpellID != nil {
+                selection = .published
+            }
+        }
+        .onChange(of: deepLinkModel.pendingPublishedSpellID) { spellID in
+            if spellID != nil {
+                selection = .published
             }
         }
     }

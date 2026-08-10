@@ -62,7 +62,11 @@ private struct WelcomeView: View {
                     ]
                 )
             }
+            .padding(18)
             .frame(maxWidth: 720)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.22), lineWidth: 1))
 
             Button {
                 sessionModel.authScreen = .email

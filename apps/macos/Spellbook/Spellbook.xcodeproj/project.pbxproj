@@ -17,6 +17,8 @@
 		A10100000000000000000008 /* SpellbookAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10200000000000000000008 /* SpellbookAPI.swift */; };
 		A10100000000000000000009 /* SpellbookApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10200000000000000000009 /* SpellbookApp.swift */; };
 		A10100000000000000000010 /* URL+Spellbook.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10200000000000000000010 /* URL+Spellbook.swift */; };
+		A10100000000000000000011 /* DeepLinkModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10200000000000000000013 /* DeepLinkModel.swift */; };
+		A10100000000000000000012 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10200000000000000000015 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +34,9 @@
 		A10200000000000000000010 /* URL+Spellbook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "URL+Spellbook.swift"; sourceTree = "<group>"; };
 		A10200000000000000000011 /* Spellbook.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Spellbook.entitlements; sourceTree = "<group>"; };
 		A10200000000000000000012 /* Spellbook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Spellbook.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10200000000000000000013 /* DeepLinkModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkModel.swift; sourceTree = "<group>"; };
+		A10200000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A10200000000000000000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -57,17 +62,20 @@
 			isa = PBXGroup;
 			children = (
 				A10200000000000000000009 /* SpellbookApp.swift */,
+				A10200000000000000000015 /* Assets.xcassets */,
 				A10200000000000000000001 /* AuthViews.swift */,
 				A10200000000000000000004 /* MainView.swift */,
 				A10200000000000000000007 /* SpellPages.swift */,
 				A10200000000000000000006 /* Spell.swift */,
-				A10200000000000000000005 /* Session.swift */,
-				A10200000000000000000008 /* SpellbookAPI.swift */,
-				A10200000000000000000003 /* LocalSpellStore.swift */,
-				A10200000000000000000002 /* InstructionManager.swift */,
-				A10200000000000000000010 /* URL+Spellbook.swift */,
-				A10200000000000000000011 /* Spellbook.entitlements */,
-			);
+					A10200000000000000000005 /* Session.swift */,
+					A10200000000000000000013 /* DeepLinkModel.swift */,
+					A10200000000000000000008 /* SpellbookAPI.swift */,
+					A10200000000000000000003 /* LocalSpellStore.swift */,
+					A10200000000000000000002 /* InstructionManager.swift */,
+					A10200000000000000000010 /* URL+Spellbook.swift */,
+					A10200000000000000000011 /* Spellbook.entitlements */,
+					A10200000000000000000014 /* Info.plist */,
+				);
 			path = Spellbook;
 			sourceTree = "<group>";
 		};
@@ -137,6 +145,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10100000000000000000012 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -152,9 +161,10 @@
 				A10100000000000000000004 /* MainView.swift in Sources */,
 				A10100000000000000000007 /* SpellPages.swift in Sources */,
 				A10100000000000000000006 /* Spell.swift in Sources */,
-				A10100000000000000000005 /* Session.swift in Sources */,
-				A10100000000000000000008 /* SpellbookAPI.swift in Sources */,
-				A10100000000000000000003 /* LocalSpellStore.swift in Sources */,
+					A10100000000000000000005 /* Session.swift in Sources */,
+					A10100000000000000000011 /* DeepLinkModel.swift in Sources */,
+					A10100000000000000000008 /* SpellbookAPI.swift in Sources */,
+					A10100000000000000000003 /* LocalSpellStore.swift in Sources */,
 				A10100000000000000000002 /* InstructionManager.swift in Sources */,
 				A10100000000000000000010 /* URL+Spellbook.swift in Sources */,
 			);
@@ -282,6 +292,7 @@
 		A11000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_ENTITLEMENTS = Spellbook/Spellbook.entitlements;
 				CODE_SIGN_IDENTITY = "-";
@@ -290,10 +301,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Spellbook;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Spellbook/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.raddus.spellbook;
@@ -306,6 +315,7 @@
 		A11000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_ENTITLEMENTS = Spellbook/Spellbook.entitlements;
 				CODE_SIGN_IDENTITY = "-";
@@ -314,10 +324,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Spellbook;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Spellbook/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.raddus.spellbook;

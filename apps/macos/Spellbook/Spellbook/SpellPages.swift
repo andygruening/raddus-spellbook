@@ -335,6 +335,12 @@ struct StagedSpellDetailView: View {
                         .textSelection(.enabled)
                 }
 
+                LabeledContent("Trigger") {
+                    Text(spell.trigger.isEmpty ? "Not set" : spell.trigger)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+
                 LabeledContent("Tags") {
                     Text(spell.tags.joined(separator: ", "))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -380,6 +386,8 @@ struct StagedSpellDetailView: View {
 
                 Spacer()
 
+                SpellShareButton(spell: spell)
+
                 Button {
                     isConfirmingArchive = true
                 } label: {
@@ -395,7 +403,7 @@ struct StagedSpellDetailView: View {
             }
         }
         .padding(24)
-        .frame(width: 660, height: 640)
+        .frame(width: 660, height: 700)
         .alert("Archive staged spell?", isPresented: $isConfirmingArchive) {
             Button("Archive") {
                 archive()
@@ -514,6 +522,12 @@ struct ArchivedSpellDetailView: View {
                         .textSelection(.enabled)
                 }
 
+                LabeledContent("Trigger") {
+                    Text(spell.trigger.isEmpty ? "Not set" : spell.trigger)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+
                 LabeledContent("Tags") {
                     Text(spell.tags.joined(separator: ", "))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -559,6 +573,8 @@ struct ArchivedSpellDetailView: View {
 
                 Spacer()
 
+                SpellShareButton(spell: spell)
+
                 Button {
                     restore()
                 } label: {
@@ -568,7 +584,7 @@ struct ArchivedSpellDetailView: View {
             }
         }
         .padding(24)
-        .frame(width: 660, height: 640)
+        .frame(width: 660, height: 700)
         .spellbookErrorAlert(message: $errorMessage)
     }
 
@@ -651,6 +667,7 @@ struct SpellFormView: View {
 
     @State private var name = ""
     @State private var spellDescription = ""
+    @State private var trigger = ""
     @State private var content = ""
     @State private var tags = "review"
     @State private var validationMessage: String?
@@ -676,6 +693,7 @@ struct SpellFormView: View {
         let spell = mode.existingSpell
         _name = State(initialValue: spell?.name ?? "")
         _spellDescription = State(initialValue: spell?.description ?? "")
+        _trigger = State(initialValue: spell?.trigger ?? "")
         _content = State(initialValue: spell?.content ?? "")
         _tags = State(initialValue: spell?.tags.joined(separator: ", ") ?? "review")
     }
@@ -683,6 +701,7 @@ struct SpellFormView: View {
     private var canCreate: Bool {
         !trimmed(name).isEmpty
             && !trimmed(spellDescription).isEmpty
+            && !trimmed(trigger).isEmpty
             && !trimmed(content).isEmpty
     }
 
@@ -713,6 +732,18 @@ struct SpellFormView: View {
                     Text("Description")
                         .font(.callout.weight(.medium))
                     TextEditor(text: $spellDescription)
+                        .font(.body)
+                        .frame(minHeight: 70)
+                        .scrollContentBackground(.hidden)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.22), lineWidth: 1))
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Trigger")
+                        .font(.callout.weight(.medium))
+                    TextEditor(text: $trigger)
                         .font(.body)
                         .frame(minHeight: 70)
                         .scrollContentBackground(.hidden)
@@ -767,6 +798,11 @@ struct SpellFormView: View {
                     dismiss()
                 }
                 .disabled(isBusy)
+
+                if let existingSpell = mode.existingSpell {
+                    SpellShareButton(spell: existingSpell)
+                        .disabled(isBusy)
+                }
 
                 if onInstall != nil {
                     Button {
@@ -958,7 +994,7 @@ struct SpellFormView: View {
 
     private func draftSpell() -> Spell? {
         guard canCreate else {
-            validationMessage = "Fill in name, description, and markdown content."
+            validationMessage = "Fill in name, description, trigger, and markdown content."
             return nil
         }
 
@@ -967,6 +1003,7 @@ struct SpellFormView: View {
             uid: existing?.uid,
             name: trimmed(name),
             description: trimmed(spellDescription),
+            trigger: trimmed(trigger),
             tags: parsedTags(),
             file: existing?.file ?? "",
             content: trimmed(content),
@@ -1010,9 +1047,30 @@ struct SpellMetadataValue: View {
     }
 }
 
+struct SpellShareButton: View {
+    var spell: Spell
+
+    var body: some View {
+        if let uid = spell.uid {
+            ShareLink(item: SpellbookAPI.shared.dynamicSpellLink(uid: uid)) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            .help("Share dynamic link")
+        } else {
+            Button {
+            } label: {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            .disabled(true)
+            .help("Publish this spell before sharing")
+        }
+    }
+}
+
 struct PublishedSpellsView: View {
     @EnvironmentObject private var localStore: LocalSpellStore
     @EnvironmentObject private var sessionModel: SessionModel
+    @EnvironmentObject private var deepLinkModel: DeepLinkModel
     @State private var spells: [Spell] = []
     @State private var searchText = ""
     @State private var isLoading = false
@@ -1027,7 +1085,7 @@ struct PublishedSpellsView: View {
                 return true
             }
 
-            let searchable = [spell.name, spell.description, spell.tags.joined(separator: " "), spell.content ?? ""]
+            let searchable = [spell.name, spell.description, spell.trigger, spell.tags.joined(separator: " "), spell.content ?? ""]
                 .joined(separator: " ")
                 .lowercased()
             return searchable.contains(query)
@@ -1080,6 +1138,17 @@ struct PublishedSpellsView: View {
         .task {
             if spells.isEmpty {
                 await loadAsync()
+            } else {
+                await openPendingPublishedSpellIfAvailable()
+            }
+        }
+        .onChange(of: deepLinkModel.pendingPublishedSpellID) { _ in
+            Task {
+                if spells.isEmpty {
+                    await loadAsync()
+                } else {
+                    await openPendingPublishedSpellIfAvailable()
+                }
             }
         }
         .sheet(item: $viewingSpell) { spell in
@@ -1113,12 +1182,37 @@ struct PublishedSpellsView: View {
             let response = try await SpellbookAPI.shared.publicSpells(token: sessionModel.session?.token)
             spells = response
             isLoading = false
+            await openPendingPublishedSpellIfAvailable()
         } catch SpellbookError.expiredSession {
             isLoading = false
             sessionModel.clearExpiredSession()
         } catch {
             errorMessage = error.localizedDescription
             isLoading = false
+        }
+    }
+
+    private func openPendingPublishedSpellIfAvailable() async {
+        guard let uid = deepLinkModel.pendingPublishedSpellID else {
+            return
+        }
+
+        if let spell = spells.first(where: { $0.uid == uid }) {
+            viewingSpell = spell
+            deepLinkModel.pendingPublishedSpellID = nil
+            return
+        }
+
+        do {
+            let spell = try await SpellbookAPI.shared.publicSpell(uid: uid, token: sessionModel.session?.token)
+            replacePublishedSpell(spell, matching: spell)
+            viewingSpell = spell
+            deepLinkModel.pendingPublishedSpellID = nil
+        } catch SpellbookError.expiredSession {
+            sessionModel.clearExpiredSession()
+        } catch {
+            errorMessage = error.localizedDescription
+            deepLinkModel.pendingPublishedSpellID = nil
         }
     }
 
@@ -1371,7 +1465,7 @@ struct SettingsView: View {
             .help("Review instruction")
 
             Button(role: .destructive) {
-                localStore.removeTarget(target)
+                removeTarget(target)
             } label: {
                 Image(systemName: "trash")
                     .frame(width: 24, height: 24)
@@ -1382,6 +1476,16 @@ struct SettingsView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.18), lineWidth: 1))
+    }
+
+    private func removeTarget(_ target: SpellbookTarget) {
+        do {
+            try localStore.removeTarget(target)
+            statusMessage = "Removed \(target.name)."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

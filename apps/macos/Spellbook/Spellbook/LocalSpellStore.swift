@@ -187,8 +187,18 @@ final class LocalSpellStore: ObservableObject {
         }
     }
 
-    func removeTarget(_ target: SpellbookTarget) {
-        targets.removeAll { $0.id == target.id }
+    func removeTarget(_ target: SpellbookTarget) throws {
+        guard let index = targets.firstIndex(where: { $0.id == target.id }) else {
+            throw SpellbookError.message("That target could not be found.")
+        }
+
+        guard let directoryURL = resolveDirectoryURL(for: target) else {
+            throw SpellbookError.message("Choose the target directory again before removing it.")
+        }
+
+        try InstructionManager.removeManagedBlock(from: target.instructionURL(in: directoryURL))
+        targets.remove(at: index)
+        stopAccessingRemovedTarget(directoryURL)
 
         if selectedTargetID == target.id {
             selectedTargetID = targets.first?.id
@@ -245,6 +255,9 @@ final class LocalSpellStore: ObservableObject {
             incoming.uid = incoming.uid ?? existing.uid
             incoming.ownerEmail = incoming.ownerEmail ?? hydratedSpells[index].ownerEmail
             incoming.content = incoming.content ?? hydratedSpells[index].content
+            if incoming.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                incoming.trigger = hydratedSpells[index].trigger
+            }
             registry.spells[index] = incoming
         } else {
             registry.spells.insert(incoming, at: 0)
@@ -296,6 +309,9 @@ final class LocalSpellStore: ObservableObject {
         updated.uid = remoteSpell.uid
         updated.name = remoteSpell.name
         updated.description = remoteSpell.description
+        updated.trigger = remoteSpell.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? hydratedSpells[index].trigger
+            : remoteSpell.trigger
         updated.tags = remoteSpell.tags
         updated.content = hydratedSpells[index].content ?? remoteSpell.content
         updated.ownerEmail = signedInEmail
@@ -335,6 +351,9 @@ final class LocalSpellStore: ObservableObject {
             incoming.uid = incoming.uid ?? existing.uid
             incoming.ownerEmail = incoming.ownerEmail ?? approvedHydrated[approvedIndex].ownerEmail
             incoming.content = incoming.content ?? approvedHydrated[approvedIndex].content
+            if incoming.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                incoming.trigger = approvedHydrated[approvedIndex].trigger
+            }
             approvedRegistry.spells[approvedIndex] = incoming
         } else {
             incoming = try preparedSpell(incoming, registry: approvedRegistry, registryURL: spellsURL)
@@ -440,6 +459,9 @@ final class LocalSpellStore: ObservableObject {
             restored.uid = restored.uid ?? existing.uid
             restored.ownerEmail = restored.ownerEmail ?? approvedHydrated[approvedIndex].ownerEmail
             restored.content = restored.content ?? approvedHydrated[approvedIndex].content
+            if restored.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                restored.trigger = approvedHydrated[approvedIndex].trigger
+            }
             approvedRegistry.spells[approvedIndex] = restored
         } else {
             restored = try preparedSpell(restored, registry: approvedRegistry, registryURL: spellsURL)
@@ -515,6 +537,9 @@ final class LocalSpellStore: ObservableObject {
                FileManager.default.fileExists(atPath: markdownURL.path(percentEncoded: false)),
                let content = try? String(contentsOf: markdownURL, encoding: .utf8) {
                 hydrated.content = content
+                if hydrated.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    hydrated.trigger = Spell.trigger(from: content) ?? ""
+                }
             }
             return hydrated
         }
@@ -540,6 +565,9 @@ final class LocalSpellStore: ObservableObject {
             incoming.uid = incoming.uid ?? existing.uid
             incoming.ownerEmail = incoming.ownerEmail ?? hydratedArchive[index].ownerEmail
             incoming.content = incoming.content ?? hydratedArchive[index].content
+            if incoming.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                incoming.trigger = hydratedArchive[index].trigger
+            }
             archiveRegistry.spells[index] = incoming
         } else {
             incoming = try preparedSpell(incoming, registry: archiveRegistry, registryURL: archiveURL)
@@ -570,7 +598,7 @@ final class LocalSpellStore: ObservableObject {
             withIntermediateDirectories: true
         )
 
-        let markdown = spell.content ?? "# \(spell.name)\n\n\(spell.description)\n"
+        let markdown = spell.content ?? "# \(spell.name)\n\n\(spell.description)\n\n## Trigger\n\n\(spell.trigger)\n"
         try markdown.write(to: markdownURL, atomically: true, encoding: .utf8)
     }
 
@@ -707,6 +735,13 @@ final class LocalSpellStore: ObservableObject {
             scopedURL?.stopAccessingSecurityScopedResource()
             scopedURL = url
             _ = url.startAccessingSecurityScopedResource()
+        }
+    }
+
+    private func stopAccessingRemovedTarget(_ url: URL) {
+        if scopedURL == url {
+            scopedURL?.stopAccessingSecurityScopedResource()
+            scopedURL = nil
         }
     }
 }
