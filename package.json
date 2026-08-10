@@ -11,7 +11,10 @@
     "test": "npm run test -w workers/api",
     "dev:api": "npm run dev -w workers/api",
     "dev:web": "npm run dev -w apps/web",
-    "build:web": "npm run build -w apps/web"
+    "build:web": "npm run build -w apps/web",
+    "deploy:web:create": "npm run deploy:create -w apps/web",
+    "deploy:web": "npm run deploy -w apps/web",
+    "deploy:web:preview": "npm run deploy:preview -w apps/web"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

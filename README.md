@@ -1,6 +1,6 @@
 # Raddus Spellbook
 
-Spellbook is a native macOS app and Cloudflare backend for capturing reusable AI-agent review instructions from local agent work, storing a local `spells.json` index plus markdown spell files, and sharing public spells through a hosted API.
+Spellbook is a native macOS app and Cloudflare backend for capturing reusable AI-agent instructions from local agent work, storing a local `spells.json` index plus markdown spell files, and sharing public spells through a hosted API.
 
 ## Structure
 
@@ -13,10 +13,37 @@ Spellbook is a native macOS app and Cloudflare backend for capturing reusable AI
 The macOS and web clients point to:
 
 ```text
-https://spellbook-api.andygruening.workers.dev
+https://api.spellbook.raddus.dev/
 ```
 
 The app does not expose an editable API URL.
+
+## Dynamic Spell Links
+
+The Worker exposes dynamic spell links at:
+
+```text
+https://api.spellbook.raddus.dev/open/<spell-id>
+```
+
+macOS requests redirect to `spellbook://spell/<spell-id>`. Other requests redirect to the production web app with `?spell=<spell-id>` so the relevant public spell can open automatically.
+
+## Deploy The Web App
+
+The read-only web app deploys to Cloudflare Pages as the `spellbook` project. Create the Pages project once, then deploy production builds from the repo root:
+
+```bash
+npm run deploy:web:create
+npm run deploy:web
+```
+
+Attach `spellbook.raddus.dev` to this Pages project so dynamic links from the API land on the deployed web app.
+
+For preview deployments, run:
+
+```bash
+npm run deploy:web:preview
+```
 
 ## Local Spell Files
 
@@ -30,7 +57,8 @@ Each target directory stores a `spells.json` index next to a `spells/` directory
       "uid": "server-id-after-publish",
       "name": "Short spell name",
       "description": "What this spell helps the agent remember.",
-      "tags": ["review"],
+      "trigger": "When the agent should activate this spell.",
+      "tags": ["instruction"],
       "file": "spells/short-spell-name.md"
     }
   ]
@@ -42,6 +70,10 @@ Unpublished spells omit `uid`. The referenced markdown file holds the full instr
 ## Run The macOS App
 
 Open `apps/macos/Spellbook/Spellbook.xcodeproj` in Xcode and run the `Spellbook` scheme. The target builds a native macOS `.app` with sandboxed network access, user-selected read/write file access, and Keychain-backed session storage.
+
+## Publish The macOS App
+
+Use Xcode's Organizer flow to archive, sign, and notarize the macOS app for direct distribution. See `apps/macos/Spellbook/PUBLISHING.md` for the release checklist and GitHub `.dmg` upload steps.
 
 ## Worker Secrets
 

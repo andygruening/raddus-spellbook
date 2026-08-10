@@ -4,6 +4,7 @@ export type SpellInput = {
   uid: string | null;
   name: string;
   description: string;
+  trigger: string;
   tags: string[];
   file: string;
   content: string;
@@ -13,6 +14,7 @@ export type SpellRow = {
   id: string;
   name: string;
   description: string;
+  trigger: string;
   file: string;
   content: string;
   tags_json: string;
@@ -29,6 +31,7 @@ export type SpellResponse = {
   uid: string;
   name: string;
   description: string;
+  trigger: string;
   tags: string[];
   file: string;
   content: string;
@@ -46,6 +49,7 @@ export function parseSpellInput(body: Record<string, unknown>): SpellInput {
     uid: optionalText(body.uid, 160),
     name,
     description: requiredText(body.description, "Description is required.", 500),
+    trigger: requiredText(body.trigger, "Trigger is required.", 1000),
     tags: parseTags(body.tags),
     file: validatedFile(file),
     content: requiredText(body.content, "Markdown content is required.", 50000)
@@ -57,6 +61,7 @@ export function rowToSpell(row: SpellRow): SpellResponse {
     uid: row.id,
     name: row.name,
     description: row.description,
+    trigger: row.trigger,
     tags: parseTagsJson(row.tags_json),
     file: row.file,
     content: row.content,
@@ -165,6 +170,7 @@ export function isSpellResponse(value: unknown): value is SpellResponse {
     typeof value.uid === "string" &&
     typeof value.name === "string" &&
     typeof value.description === "string" &&
+    typeof value.trigger === "string" &&
     Array.isArray(value.tags) &&
     typeof value.file === "string" &&
     typeof value.content === "string"

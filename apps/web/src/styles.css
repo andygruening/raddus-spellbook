@@ -161,6 +161,11 @@ h1 {
   padding: 18px;
 }
 
+.spell-card.is-selected {
+  border-color: #4f9cff;
+  box-shadow: 0 0 0 3px rgba(79, 156, 255, 0.16);
+}
+
 .spell-card h3 {
   font-size: 1.05rem;
 }

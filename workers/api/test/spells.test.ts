@@ -7,6 +7,7 @@ describe("spell helpers", () => {
       parseSpellInput({
         name: "Review Boundaries",
         description: "Keep review feedback scoped to the requested change.",
+        trigger: "Use when reviewing code changes for scope drift.",
         tags: ["Review", " review ", "scope"],
         file: "spells/review-boundaries.md",
         content: "# Review Boundaries\n\nCheck ownership and scope."
@@ -15,6 +16,7 @@ describe("spell helpers", () => {
       uid: null,
       name: "Review Boundaries",
       description: "Keep review feedback scoped to the requested change.",
+      trigger: "Use when reviewing code changes for scope drift.",
       tags: ["review", "scope"],
       file: "spells/review-boundaries.md",
       content: "# Review Boundaries\n\nCheck ownership and scope."
@@ -26,11 +28,24 @@ describe("spell helpers", () => {
       parseSpellInput({
         name: "Bad Path",
         description: "Do not allow path traversal.",
+        trigger: "Use when validating spell file paths.",
         tags: ["review"],
         file: "../bad.md",
         content: "# Bad Path"
       })
     ).toThrow("Spell files must live under ./spells and end in .md.");
+  });
+
+  it("requires trigger metadata", () => {
+    expect(() =>
+      parseSpellInput({
+        name: "Missing Trigger",
+        description: "Do not publish incomplete activation metadata.",
+        tags: ["review"],
+        file: "spells/missing-trigger.md",
+        content: "# Missing Trigger"
+      })
+    ).toThrow("Trigger is required.");
   });
 
   it("maps D1 rows to uid-based spell responses", () => {
@@ -39,6 +54,7 @@ describe("spell helpers", () => {
         id: "uid-123",
         name: "Review Boundaries",
         description: "Keep review feedback scoped.",
+        trigger: "Use when reviewing code changes for scope drift.",
         file: "spells/review-boundaries.md",
         content: "# Review Boundaries",
         tags_json: "[\"review\"]",
@@ -54,6 +70,7 @@ describe("spell helpers", () => {
       uid: "uid-123",
       name: "Review Boundaries",
       description: "Keep review feedback scoped.",
+      trigger: "Use when reviewing code changes for scope drift.",
       tags: ["review"],
       file: "spells/review-boundaries.md",
       content: "# Review Boundaries",

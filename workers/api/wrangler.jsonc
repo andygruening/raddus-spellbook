@@ -17,6 +17,10 @@
 			"head_sampling_rate": 0.05
 		}
 	},
+	"vars": {
+		"SPELLBOOK_WEB_URL": "https://spellbook.raddus.dev/",
+		"SPELLBOOK_MACOS_DEEPLINK_SCHEME": "spellbook"
+	},
 	"d1_databases": [
 		{
 			"binding": "DB",

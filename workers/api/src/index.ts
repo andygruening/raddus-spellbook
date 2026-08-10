@@ -30,7 +30,15 @@ type SpellbookSecrets = {
   RESEND_FROM_EMAIL?: string;
 };
 
-type SpellbookEnv = Env & SpellbookSecrets;
+type SpellbookConfig = {
+  SPELLBOOK_WEB_URL?: string;
+  SPELLBOOK_MACOS_DEEPLINK_SCHEME?: string;
+};
+
+type SpellbookEnv = Env & SpellbookSecrets & SpellbookConfig;
+
+const DEFAULT_SPELLBOOK_WEB_URL = "https://spellbook.raddus.dev/";
+const DEFAULT_SPELLBOOK_MACOS_SCHEME = "spellbook";
 
 export default {
   async fetch(request: Request, env: SpellbookEnv, ctx: ExecutionContext): Promise<Response> {
@@ -64,6 +72,11 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
     return json({ ok: true, product: "Raddus Spellbook" });
   }
 
+  const dynamicLinkMatch = url.pathname.match(/^\/open\/([^/]+)$/);
+  if (request.method === "GET" && dynamicLinkMatch?.[1]) {
+    return redirectToSpell(request, env, decodeURIComponent(dynamicLinkMatch[1]));
+  }
+
   if (request.method === "POST" && url.pathname === "/api/auth/request-otp") {
     return requestOtp(request, env, ctx);
   }
@@ -93,13 +106,48 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
     return setSpellStar(env, decodeURIComponent(starMatch[1]), user.email, request.method === "POST");
   }
 
-  const deleteMatch = url.pathname.match(/^\/api\/spells\/([^/]+)$/);
-  if (request.method === "DELETE" && deleteMatch?.[1]) {
+  const spellMatch = url.pathname.match(/^\/api\/spells\/([^/]+)$/);
+  if (request.method === "GET" && spellMatch?.[1]) {
+    const user = await authenticateOptional(request, env.SPELLBOOK_JWT_SECRET);
+    return getPublicSpell(env, decodeURIComponent(spellMatch[1]), user?.email ?? null);
+  }
+
+  if (request.method === "DELETE" && spellMatch?.[1]) {
     const user = await authenticate(request, env.SPELLBOOK_JWT_SECRET);
-    return deleteSpell(env, decodeURIComponent(deleteMatch[1]), user.email);
+    return deleteSpell(env, decodeURIComponent(spellMatch[1]), user.email);
   }
 
   return jsonError("That Spellbook endpoint was not found.", 404);
+}
+
+function redirectToSpell(request: Request, env: SpellbookEnv, spellId: string): Response {
+  const normalizedSpellId = spellId.trim();
+  if (!normalizedSpellId) {
+    throw new AppError("Spell not found.", 404);
+  }
+
+  const location = requestComesFromMacOS(request)
+    ? macOSSpellURL(env, normalizedSpellId)
+    : webSpellURL(env, normalizedSpellId);
+
+  return Response.redirect(location, 302);
+}
+
+function requestComesFromMacOS(request: Request): boolean {
+  const userAgent = request.headers.get("User-Agent") ?? "";
+  return /Macintosh|Mac OS X/i.test(userAgent)
+    && !/iPhone|iPad|iPod|Mobile/i.test(userAgent);
+}
+
+function macOSSpellURL(env: SpellbookEnv, spellId: string): string {
+  const scheme = env.SPELLBOOK_MACOS_DEEPLINK_SCHEME || DEFAULT_SPELLBOOK_MACOS_SCHEME;
+  return `${scheme}://spell/${encodeURIComponent(spellId)}`;
+}
+
+function webSpellURL(env: SpellbookEnv, spellId: string): string {
+  const url = new URL(env.SPELLBOOK_WEB_URL || DEFAULT_SPELLBOOK_WEB_URL);
+  url.searchParams.set("spell", spellId);
+  return url.toString();
 }
 
 async function requestOtp(request: Request, env: SpellbookEnv, ctx: ExecutionContext): Promise<Response> {
@@ -171,7 +219,7 @@ async function listPublicSpells(env: SpellbookEnv, url: URL, viewerEmail: string
   const db = requireDatabase(env);
   const limit = parseLimit(url.searchParams.get("limit"));
   const result = await db.prepare(
-    `SELECT id, name, description, file, content, tags_json, owner_email,
+    `SELECT id, name, description, trigger, file, content, tags_json, owner_email,
             published, created_at, updated_at, published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE
@@ -196,7 +244,7 @@ async function listPublicSpells(env: SpellbookEnv, url: URL, viewerEmail: string
 async function listMine(env: SpellbookEnv, ownerEmail: string): Promise<Response> {
   const db = requireDatabase(env);
   const result = await db.prepare(
-    `SELECT id, name, description, file, content, tags_json, owner_email,
+    `SELECT id, name, description, trigger, file, content, tags_json, owner_email,
             published, created_at, updated_at, published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE
@@ -217,6 +265,15 @@ async function listMine(env: SpellbookEnv, ownerEmail: string): Promise<Response
   return json({ spells: rowsToSpells(result.results) });
 }
 
+async function getPublicSpell(env: SpellbookEnv, uid: string, viewerEmail: string | null): Promise<Response> {
+  const spell = await findSpellByUID(env, uid, viewerEmail);
+  if (!spell || spell.published !== 1) {
+    throw new AppError("Spell not found.", 404);
+  }
+
+  return json({ spell: rowToSpell(spell) });
+}
+
 async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: string): Promise<Response> {
   const db = requireDatabase(env);
   const input = parseSpellInput(await readJsonObject(request));
@@ -234,13 +291,14 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
 
     await db.prepare(
       `UPDATE spells
-       SET name = ?, description = ?, file = ?, content = ?, tags_json = ?, published = 1, updated_at = ?,
+       SET name = ?, description = ?, trigger = ?, file = ?, content = ?, tags_json = ?, published = 1, updated_at = ?,
            published_at = COALESCE(published_at, ?)
        WHERE id = ?`
     )
       .bind(
         input.name,
         input.description,
+        input.trigger,
         input.file,
         input.content,
         JSON.stringify(input.tags),
@@ -261,15 +319,16 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
   const uid = crypto.randomUUID();
   await db.prepare(
     `INSERT INTO spells (
-       id, name, description, file, content, tags_json, owner_email,
+       id, name, description, trigger, file, content, tags_json, owner_email,
        published, created_at, updated_at, published_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
   )
     .bind(
       uid,
       input.name,
       input.description,
+      input.trigger,
       input.file,
       input.content,
       JSON.stringify(input.tags),
@@ -337,7 +396,7 @@ async function setSpellStar(env: SpellbookEnv, uid: string, ownerEmail: string, 
 async function findSpellByUID(env: SpellbookEnv, uid: string, viewerEmail: string | null = null): Promise<SpellRow | null> {
   const db = requireDatabase(env);
   return db.prepare(
-    `SELECT id, name, description, file, content, tags_json, owner_email,
+    `SELECT id, name, description, trigger, file, content, tags_json, owner_email,
             published, created_at, updated_at, published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE
