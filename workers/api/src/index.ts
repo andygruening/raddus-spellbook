@@ -146,7 +146,9 @@ function macOSSpellURL(env: SpellbookEnv, spellId: string): string {
 
 function webSpellURL(env: SpellbookEnv, spellId: string): string {
   const url = new URL(env.SPELLBOOK_WEB_URL || DEFAULT_SPELLBOOK_WEB_URL);
-  url.searchParams.set("spell", spellId);
+  url.pathname = `/spell/${encodeURIComponent(spellId)}`;
+  url.search = "";
+  url.hash = "";
   return url.toString();
 }
 
@@ -219,7 +221,7 @@ async function listPublicSpells(env: SpellbookEnv, url: URL, viewerEmail: string
   const db = requireDatabase(env);
   const limit = parseLimit(url.searchParams.get("limit"));
   const result = await db.prepare(
-    `SELECT id, name, description, trigger, file, content, tags_json, owner_email,
+    `SELECT id, name, description, trigger, file, content, version, tags_json, owner_email,
             published, created_at, updated_at, published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE
@@ -244,7 +246,7 @@ async function listPublicSpells(env: SpellbookEnv, url: URL, viewerEmail: string
 async function listMine(env: SpellbookEnv, ownerEmail: string): Promise<Response> {
   const db = requireDatabase(env);
   const result = await db.prepare(
-    `SELECT id, name, description, trigger, file, content, tags_json, owner_email,
+    `SELECT id, name, description, trigger, file, content, version, tags_json, owner_email,
             published, created_at, updated_at, published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE
@@ -291,7 +293,7 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
 
     await db.prepare(
       `UPDATE spells
-       SET name = ?, description = ?, trigger = ?, file = ?, content = ?, tags_json = ?, published = 1, updated_at = ?,
+       SET name = ?, description = ?, trigger = ?, file = ?, content = ?, tags_json = ?, version = version + 1, published = 1, updated_at = ?,
            published_at = COALESCE(published_at, ?)
        WHERE id = ?`
     )
@@ -319,10 +321,10 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
   const uid = crypto.randomUUID();
   await db.prepare(
     `INSERT INTO spells (
-       id, name, description, trigger, file, content, tags_json, owner_email,
+       id, name, description, trigger, file, content, version, tags_json, owner_email,
        published, created_at, updated_at, published_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?, ?, ?)`
   )
     .bind(
       uid,
@@ -396,7 +398,7 @@ async function setSpellStar(env: SpellbookEnv, uid: string, ownerEmail: string, 
 async function findSpellByUID(env: SpellbookEnv, uid: string, viewerEmail: string | null = null): Promise<SpellRow | null> {
   const db = requireDatabase(env);
   return db.prepare(
-    `SELECT id, name, description, trigger, file, content, tags_json, owner_email,
+    `SELECT id, name, description, trigger, file, content, version, tags_json, owner_email,
             published, created_at, updated_at, published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE

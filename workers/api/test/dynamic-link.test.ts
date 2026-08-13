@@ -29,7 +29,7 @@ describe("dynamic spell links", () => {
     );
 
     expect(response.status).toBe(302);
-    expect(response.headers.get("Location")).toBe("https://spellbook.example.com/?spell=spell-123");
+    expect(response.headers.get("Location")).toBe("https://spellbook.example.com/spell/spell-123");
   });
 
   it("does not treat iPadOS desktop-class Safari as macOS", async () => {
@@ -45,7 +45,7 @@ describe("dynamic spell links", () => {
     );
 
     expect(response.status).toBe(302);
-    expect(response.headers.get("Location")).toBe("https://spellbook.example.com/?spell=spell-123");
+    expect(response.headers.get("Location")).toBe("https://spellbook.example.com/spell/spell-123");
   });
 });
 

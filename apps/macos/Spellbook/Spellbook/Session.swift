@@ -111,6 +111,7 @@ enum AuthScreen: Equatable {
 enum SpellbookError: LocalizedError {
     case message(String)
     case expiredSession
+    case missingPublishedSpell
 
     var errorDescription: String? {
         switch self {
@@ -118,6 +119,8 @@ enum SpellbookError: LocalizedError {
             return message
         case .expiredSession:
             return "Your session expired. Sign in again."
+        case .missingPublishedSpell:
+            return "That published spell no longer exists."
         }
     }
 }

@@ -123,6 +123,16 @@ struct LocalSpellsView: View {
             }
             errorMessage = nil
             editingSpell = nil
+        } catch SpellbookError.missingPublishedSpell {
+            do {
+                try await republishMissingRemote(spell, replacing: originalSpell, session: session)
+            } catch SpellbookError.expiredSession {
+                sessionModel.clearExpiredSession()
+                throw SpellbookError.expiredSession
+            } catch {
+                errorMessage = error.localizedDescription
+                throw error
+            }
         } catch SpellbookError.expiredSession {
             sessionModel.clearExpiredSession()
             throw SpellbookError.expiredSession
@@ -130,6 +140,32 @@ struct LocalSpellsView: View {
             errorMessage = error.localizedDescription
             throw error
         }
+    }
+
+    private func republishMissingRemote(_ spell: Spell, replacing originalSpell: Spell, session: SpellbookSession) async throws {
+        guard let staleUID = originalSpell.uid ?? spell.uid else {
+            throw SpellbookError.missingPublishedSpell
+        }
+
+        var localOnly = spell
+        localOnly.uid = nil
+        localOnly.ownerEmail = nil
+        localOnly.publishedAt = nil
+        localOnly.starCount = 0
+        localOnly.starredByMe = false
+
+        guard let resetSpell = try localStore.markUnpublished(uid: staleUID, replacement: localOnly) else {
+            throw SpellbookError.message("That local spell could not be reconciled with the published registry.")
+        }
+
+        let remote = try await SpellbookAPI.shared.publish(spell: resetSpell, token: session.token)
+        try localStore.updateAfterPublish(localIdentifier: resetSpell.id, remoteSpell: remote, signedInEmail: session.email)
+        publishedSpellsByUID.removeValue(forKey: staleUID)
+        if let uid = remote.uid {
+            publishedSpellsByUID[uid] = remote
+        }
+        errorMessage = nil
+        editingSpell = nil
     }
 
     private func create(_ spell: Spell) throws {
@@ -189,13 +225,31 @@ struct LocalSpellsView: View {
         Task {
             do {
                 let publicSpells = try await SpellbookAPI.shared.publicSpells(token: sessionModel.session?.token)
-                let matchingSpells = publicSpells.reduce(into: [String: Spell]()) { result, spell in
+                var matchingSpells = publicSpells.reduce(into: [String: Spell]()) { result, spell in
                     if let uid = spell.uid, publishedUIDs.contains(uid) {
                         result[uid] = spell
                     }
                 }
+                var unpublishedUIDs: Set<String> = []
+
+                for uid in publishedUIDs.subtracting(matchingSpells.keys) {
+                    do {
+                        let spell = try await SpellbookAPI.shared.publicSpell(uid: uid, token: sessionModel.session?.token)
+                        matchingSpells[uid] = spell
+                    } catch SpellbookError.missingPublishedSpell {
+                        unpublishedUIDs.insert(uid)
+                    } catch SpellbookError.expiredSession {
+                        throw SpellbookError.expiredSession
+                    } catch {
+                        continue
+                    }
+                }
 
                 await MainActor.run {
+                    for uid in unpublishedUIDs {
+                        _ = try? localStore.markUnpublished(uid: uid)
+                        publishedSpellsByUID.removeValue(forKey: uid)
+                    }
                     for (uid, spell) in matchingSpells {
                         publishedSpellsByUID[uid] = spell
                     }
@@ -318,7 +372,7 @@ struct StagedSpellDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Staged Spell")
                     .font(.title2.bold())
-                Text("Inspect this captured spell before approving it into spells.json.")
+                Text("Inspect this captured spell before approving it into registry.json.")
                     .foregroundStyle(.secondary)
             }
 
@@ -356,14 +410,15 @@ struct StagedSpellDetailView: View {
                     spacing: 10
                 ) {
                     SpellMetadataValue(label: "UID", value: spell.uid ?? "Not published")
-                    SpellMetadataValue(label: "File", value: spell.file.isEmpty ? "Will create" : spell.file)
+                    SpellMetadataValue(label: "Version", value: "\(spell.version)")
+                    SpellMetadataValue(label: "Storage", value: "\(spell.storageID)/\(spell.normalizedVersion)/SPEC.md")
                     SpellMetadataValue(label: "Owner", value: spell.ownerEmail ?? "Local only")
                     SpellMetadataValue(label: "Published at", value: spell.publishedAt ?? "Not published")
                 }
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Markdown file content")
+                Text("SPEC.md content")
                     .font(.callout.weight(.medium))
 
                 ScrollView {
@@ -505,7 +560,7 @@ struct ArchivedSpellDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Archived Spell")
                     .font(.title2.bold())
-                Text("Inspect this archived spell or restore it into spells.json.")
+                Text("Inspect this archived spell or restore it into registry.json.")
                     .foregroundStyle(.secondary)
             }
 
@@ -543,14 +598,15 @@ struct ArchivedSpellDetailView: View {
                     spacing: 10
                 ) {
                     SpellMetadataValue(label: "UID", value: spell.uid ?? "Not published")
-                    SpellMetadataValue(label: "File", value: spell.file.isEmpty ? "Will create" : spell.file)
+                    SpellMetadataValue(label: "Version", value: "\(spell.version)")
+                    SpellMetadataValue(label: "Storage", value: "\(spell.storageID)/\(spell.normalizedVersion)/SPEC.md")
                     SpellMetadataValue(label: "Owner", value: spell.ownerEmail ?? "Local only")
                     SpellMetadataValue(label: "Published at", value: spell.publishedAt ?? "Not published")
                 }
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Markdown file content")
+                Text("SPEC.md content")
                     .font(.callout.weight(.medium))
 
                 ScrollView {
@@ -753,7 +809,7 @@ struct SpellFormView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Markdown file content")
+                    Text("SPEC.md content")
                         .font(.callout.weight(.medium))
                     TextEditor(text: $content)
                         .font(.body)
@@ -872,7 +928,8 @@ struct SpellFormView: View {
                     spacing: 10
                 ) {
                     SpellMetadataValue(label: "UID", value: spell.uid ?? "Not published")
-                    SpellMetadataValue(label: "File", value: spell.file.isEmpty ? "Will create" : spell.file)
+                    SpellMetadataValue(label: "Version", value: "\(spell.version)")
+                    SpellMetadataValue(label: "Storage", value: "\(spell.storageID)/\(spell.normalizedVersion)/SPEC.md")
                     SpellMetadataValue(label: "Owner", value: spell.ownerEmail ?? "Local only")
                     SpellMetadataValue(label: "Published at", value: spell.publishedAt ?? "Not published")
                 }
@@ -1001,12 +1058,14 @@ struct SpellFormView: View {
         let existing = mode.existingSpell
         return Spell(
             uid: existing?.uid,
+            localID: existing?.localID,
             name: trimmed(name),
             description: trimmed(spellDescription),
             trigger: trimmed(trigger),
             tags: parsedTags(),
             file: existing?.file ?? "",
             content: trimmed(content),
+            version: existing?.version ?? 1,
             ownerEmail: existing?.ownerEmail,
             publishedAt: existing?.publishedAt,
             starCount: existing?.starCount ?? 0,
@@ -1304,6 +1363,12 @@ struct PublishedSpellsView: View {
 
         do {
             try await SpellbookAPI.shared.delete(uid: uid, token: token)
+            _ = try? localStore.markUnpublished(uid: uid)
+            spells.removeAll { $0.uid == uid }
+            errorMessage = nil
+            viewingSpell = nil
+        } catch SpellbookError.missingPublishedSpell {
+            _ = try? localStore.markUnpublished(uid: uid)
             spells.removeAll { $0.uid == uid }
             errorMessage = nil
             viewingSpell = nil
@@ -1658,6 +1723,14 @@ struct TargetInstructionReviewView: View {
     @State private var errorMessage: String?
     @State private var statusMessage: String?
 
+    private var canApplyInstruction: Bool {
+        preview != nil
+    }
+
+    private var isInstructionInstalled: Bool {
+        preview?.isInstalled == true
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
@@ -1680,7 +1753,14 @@ struct TargetInstructionReviewView: View {
                     Label("Apply", systemImage: "checkmark.circle")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(preview == nil)
+                .disabled(!canApplyInstruction)
+
+                Button(role: .destructive) {
+                    removeInstruction()
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+                .disabled(!isInstructionInstalled)
 
                 Spacer()
 
@@ -1702,10 +1782,13 @@ struct TargetInstructionReviewView: View {
                         spacing: 10
                     ) {
                         PreviewValue(label: "Target", value: preview.targetInstructionURL.path(percentEncoded: false))
+                        PreviewValue(label: "Instruction", value: preview.isInstalled ? "Installed" : "Not installed")
                         PreviewValue(label: "Block", value: preview.action.rawValue)
-                        PreviewValue(label: "spells.json", value: preview.spellsExists ? "Exists" : "Will create")
-                        PreviewValue(label: "spells-staging.json", value: preview.stagingExists ? "Exists" : "Will create")
-                        PreviewValue(label: "spells-archive.json", value: preview.archiveExists ? "Exists" : "Will create")
+                        PreviewValue(label: ".agent-context", value: preview.packageURL.path(percentEncoded: false))
+                        PreviewValue(label: "manifest.json", value: preview.manifestExists ? "Exists" : "Will create")
+                        PreviewValue(label: "registry.json", value: preview.registryExists ? "Exists" : "Will create")
+                        PreviewValue(label: "~/.spellbook/registry/staging.json", value: preview.stagingExists ? "Exists" : "Will create")
+                        PreviewValue(label: "~/.spellbook/registry/archive.json", value: preview.archiveExists ? "Exists" : "Will create")
                     }
 
                     ScrollView {
@@ -1744,6 +1827,7 @@ struct TargetInstructionReviewView: View {
             errorMessage = nil
             statusMessage = nil
         } catch {
+            preview = nil
             errorMessage = error.localizedDescription
         }
     }
@@ -1761,6 +1845,24 @@ struct TargetInstructionReviewView: View {
             errorMessage = nil
             reviewInstruction()
             statusMessage = "Applied Spellbook instruction."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeInstruction() {
+        do {
+            guard let directoryURL = localStore.directoryURL(for: target) else {
+                throw SpellbookError.message("Choose the target directory again.")
+            }
+
+            try InstructionManager.removeManagedBlock(from: target.instructionURL(in: directoryURL))
+            if target.id == localStore.selectedTargetID {
+                try localStore.refresh()
+            }
+            errorMessage = nil
+            reviewInstruction()
+            statusMessage = "Removed Spellbook instruction."
         } catch {
             errorMessage = error.localizedDescription
         }

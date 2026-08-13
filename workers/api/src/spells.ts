@@ -17,6 +17,7 @@ export type SpellRow = {
   trigger: string;
   file: string;
   content: string;
+  version: number;
   tags_json: string;
   owner_email: string;
   published: number;
@@ -35,6 +36,7 @@ export type SpellResponse = {
   tags: string[];
   file: string;
   content: string;
+  version: number;
   ownerEmail: string;
   publishedAt: string | null;
   starCount: number;
@@ -43,7 +45,7 @@ export type SpellResponse = {
 
 export function parseSpellInput(body: Record<string, unknown>): SpellInput {
   const name = requiredText(body.name, "Name is required.", 120);
-  const file = optionalText(body.file, 240) ?? `spells/${slugForFile(name)}.md`;
+  const file = optionalText(body.file, 240) ?? `instructions/${slugForFile(name)}.md`;
 
   return {
     uid: optionalText(body.uid, 160),
@@ -65,6 +67,7 @@ export function rowToSpell(row: SpellRow): SpellResponse {
     tags: parseTagsJson(row.tags_json),
     file: row.file,
     content: row.content,
+    version: row.version,
     ownerEmail: row.owner_email,
     publishedAt: row.published_at || null,
     starCount: row.star_count,
@@ -143,13 +146,19 @@ function parseTagsJson(value: string): string[] {
 
 function validatedFile(value: string): string {
   if (value.startsWith("/") || value.includes("..")) {
-    throw new AppError("Spell files must live under ./spells and end in .md.", 400);
+    throw new AppError("Instruction files must live under ./instructions or legacy ./spells and end in .md.", 400);
   }
 
   const parts = value.split("/");
   const [directory, fileName] = parts;
-  if (parts.length !== 2 || directory !== "spells" || !fileName || !fileName.endsWith(".md") || fileName.length <= 3) {
-    throw new AppError("Spell files must live under ./spells and end in .md.", 400);
+  if (
+    parts.length !== 2 ||
+    (directory !== "instructions" && directory !== "spells") ||
+    !fileName ||
+    !fileName.endsWith(".md") ||
+    fileName.length <= 3
+  ) {
+    throw new AppError("Instruction files must live under ./instructions or legacy ./spells and end in .md.", 400);
   }
 
   return value;
@@ -173,6 +182,7 @@ export function isSpellResponse(value: unknown): value is SpellResponse {
     typeof value.trigger === "string" &&
     Array.isArray(value.tags) &&
     typeof value.file === "string" &&
-    typeof value.content === "string"
+    typeof value.content === "string" &&
+    typeof value.version === "number"
   );
 }

@@ -9,7 +9,7 @@ describe("spell helpers", () => {
         description: "Keep review feedback scoped to the requested change.",
         trigger: "Use when reviewing code changes for scope drift.",
         tags: ["Review", " review ", "scope"],
-        file: "spells/review-boundaries.md",
+        file: "instructions/review-boundaries.md",
         content: "# Review Boundaries\n\nCheck ownership and scope."
       })
     ).toEqual({
@@ -18,12 +18,25 @@ describe("spell helpers", () => {
       description: "Keep review feedback scoped to the requested change.",
       trigger: "Use when reviewing code changes for scope drift.",
       tags: ["review", "scope"],
-      file: "spells/review-boundaries.md",
+      file: "instructions/review-boundaries.md",
       content: "# Review Boundaries\n\nCheck ownership and scope."
     });
   });
 
-  it("rejects files outside the spells directory", () => {
+  it("accepts legacy spell file paths", () => {
+    expect(
+      parseSpellInput({
+        name: "Legacy Path",
+        description: "Accept old local clients.",
+        trigger: "Use when validating legacy file paths.",
+        tags: ["review"],
+        file: "spells/legacy-path.md",
+        content: "# Legacy Path"
+      }).file
+    ).toBe("spells/legacy-path.md");
+  });
+
+  it("rejects files outside the instructions directory", () => {
     expect(() =>
       parseSpellInput({
         name: "Bad Path",
@@ -33,7 +46,7 @@ describe("spell helpers", () => {
         file: "../bad.md",
         content: "# Bad Path"
       })
-    ).toThrow("Spell files must live under ./spells and end in .md.");
+    ).toThrow("Instruction files must live under ./instructions or legacy ./spells and end in .md.");
   });
 
   it("requires trigger metadata", () => {
@@ -42,7 +55,7 @@ describe("spell helpers", () => {
         name: "Missing Trigger",
         description: "Do not publish incomplete activation metadata.",
         tags: ["review"],
-        file: "spells/missing-trigger.md",
+        file: "instructions/missing-trigger.md",
         content: "# Missing Trigger"
       })
     ).toThrow("Trigger is required.");
@@ -57,6 +70,7 @@ describe("spell helpers", () => {
         trigger: "Use when reviewing code changes for scope drift.",
         file: "spells/review-boundaries.md",
         content: "# Review Boundaries",
+        version: 4,
         tags_json: "[\"review\"]",
         owner_email: "ada@example.com",
         published: 1,
@@ -74,6 +88,7 @@ describe("spell helpers", () => {
       tags: ["review"],
       file: "spells/review-boundaries.md",
       content: "# Review Boundaries",
+      version: 4,
       ownerEmail: "ada@example.com",
       publishedAt: "2026-08-06T00:00:00.000Z",
       starCount: 3,

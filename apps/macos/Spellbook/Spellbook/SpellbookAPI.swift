@@ -138,6 +138,10 @@ final class SpellbookAPI {
             throw SpellbookError.expiredSession
         }
 
+        if httpResponse.statusCode == 404, isMissingPublishedSpellResponse(data) {
+            throw SpellbookError.missingPublishedSpell
+        }
+
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw SpellbookError.message(productSafeError(from: data, statusCode: httpResponse.statusCode, operation: operation))
         }
@@ -147,6 +151,11 @@ final class SpellbookAPI {
         } catch {
             throw SpellbookError.message("\(operation.failurePrefix) Spellbook could not read the server response.")
         }
+    }
+
+    private func isMissingPublishedSpellResponse(_ data: Data) -> Bool {
+        let response = try? decoder.decode(APIErrorResponse.self, from: data)
+        return response?.error.trimmingCharacters(in: .whitespacesAndNewlines) == "Spell not found."
     }
 
     private func productSafeError(from data: Data, statusCode: Int, operation: SpellbookAPIOperation) -> String {

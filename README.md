@@ -1,6 +1,6 @@
 # Raddus Spellbook
 
-Spellbook is a native macOS app and Cloudflare backend for capturing reusable AI-agent instructions from local agent work, storing a local `spells.json` index plus markdown spell files, and sharing public spells through a hosted API.
+Spellbook is a native macOS app and Cloudflare backend for capturing reusable AI-agent instructions from local agent work, storing a local agent context package, and sharing public spells through a hosted API.
 
 ## Structure
 
@@ -26,7 +26,7 @@ The Worker exposes dynamic spell links at:
 https://api.spellbook.raddus.dev/open/<spell-id>
 ```
 
-macOS requests redirect to `spellbook://spell/<spell-id>`. Other requests redirect to the production web app with `?spell=<spell-id>` so the relevant public spell can open automatically.
+macOS requests redirect to `spellbook://spell/<spell-id>`. Other requests redirect to the production web app at `/spell/<spell-id>` so the relevant public spell can open automatically.
 
 ## Deploy The Web App
 
@@ -45,27 +45,49 @@ For preview deployments, run:
 npm run deploy:web:preview
 ```
 
-## Local Spell Files
+## Local Agent Context Files
 
-Each target directory stores a `spells.json` index next to a `spells/` directory:
+Each target directory stores an `.agent-context/` package next to its `AGENTS.md`, `AGENT.md`, or `CLAUDE.md` file:
+
+```text
+.agent-context/
+  manifest.json
+  registry.json
+```
+
+The machine-local Spellbook store keeps review queues and versioned spell bodies:
+
+```text
+~/.spellbook/
+  registry/
+    staging.json
+    archive.json
+  spells/
+    <spell-uid-or-local-id>/
+      <version>/
+        SPEC.md
+```
+
+The repo-local registry uses this lightweight shape:
 
 ```json
 {
   "version": 1,
-  "spells": [
+  "agent": "codex",
+  "instructions": [
     {
       "uid": "server-id-after-publish",
+      "version": 3,
       "name": "Short spell name",
       "description": "What this spell helps the agent remember.",
       "trigger": "When the agent should activate this spell.",
-      "tags": ["instruction"],
-      "file": "spells/short-spell-name.md"
+      "tags": ["instruction"]
     }
   ]
 }
 ```
 
-Unpublished spells omit `uid`. The referenced markdown file holds the full instruction body and details.
+Unpublished local spells use `localID` instead of `uid`. Published spell versions are immutable snapshots; the backend increments `version` every time an update is published for that spell.
 
 ## Run The macOS App
 
