@@ -4,7 +4,8 @@ enum AgentContextLayout {
     static let packageDirectoryName = ".agent-context"
     static let manifestFileName = "manifest.json"
     static let registryDirectoryName = "registry"
-    static let registryFileName = "registry.json"
+    static let registryFileName = "master.json"
+    static let legacyRegistryFileName = "registry.json"
     static let stagingFileName = "staging.json"
     static let archiveFileName = "archive.json"
     static let instructionsDirectoryName = "instructions"
@@ -61,6 +62,7 @@ enum SpellbookUserStoreLayout {
     static let rootDirectoryName = ".spellbook"
     static let registryDirectoryName = "registry"
     static let spellsDirectoryName = "spells"
+    static let libraryFileName = "library.json"
     static let stagingFileName = "staging.json"
     static let archiveFileName = "archive.json"
     static let specFileName = "SPEC.md"
@@ -71,6 +73,10 @@ enum SpellbookUserStoreLayout {
 
     static var registryDirectoryURL: URL {
         rootURL.appending(path: registryDirectoryName, directoryHint: .isDirectory)
+    }
+
+    static var libraryURL: URL {
+        registryDirectoryURL.appending(path: libraryFileName)
     }
 
     static var spellsDirectoryURL: URL {
@@ -142,17 +148,20 @@ struct AgentContextManifest: Codable, Equatable {
 
 struct AgentContextEntrypoints: Codable, Equatable {
     var instructionRegistry: String
+    var installedLibrary: String?
     var stagedInstructions: String
     var archivedInstructions: String
 
     static let standard = AgentContextEntrypoints(
         instructionRegistry: AgentContextLayout.registryFileName,
+        installedLibrary: "~/\(SpellbookUserStoreLayout.rootDirectoryName)/\(SpellbookUserStoreLayout.registryDirectoryName)/\(SpellbookUserStoreLayout.libraryFileName)",
         stagedInstructions: "~/\(SpellbookUserStoreLayout.rootDirectoryName)/\(SpellbookUserStoreLayout.registryDirectoryName)/\(SpellbookUserStoreLayout.stagingFileName)",
         archivedInstructions: "~/\(SpellbookUserStoreLayout.rootDirectoryName)/\(SpellbookUserStoreLayout.registryDirectoryName)/\(SpellbookUserStoreLayout.archiveFileName)"
     )
 
     private enum CodingKeys: String, CodingKey {
         case instructionRegistry = "instruction_registry"
+        case installedLibrary = "installed_library"
         case stagedInstructions = "staged_instructions"
         case archivedInstructions = "archived_instructions"
     }
@@ -252,6 +261,10 @@ enum InstructionManager {
         )
         try migrateLegacyRegistryIfNeeded(
             from: preview.packageURL.appending(path: "instruction-registry.json"),
+            to: preview.registryURL
+        )
+        try migrateLegacyRegistryIfNeeded(
+            from: preview.packageURL.appending(path: AgentContextLayout.legacyRegistryFileName),
             to: preview.registryURL
         )
         try migrateLegacyRegistryIfNeeded(
@@ -358,7 +371,7 @@ enum InstructionManager {
     private static func legacyMarkdownURL(for spell: Spell, registryURL: URL) throws -> URL {
         let trimmedFile = AgentContextLayout.canonicalInstructionFilePath(spell.file)
         guard !trimmedFile.isEmpty, !trimmedFile.hasPrefix("/") else {
-            throw SpellbookError.message("registry.json contains an invalid instruction file path.")
+            throw SpellbookError.message("The registry contains an invalid instruction file path.")
         }
 
         let parts = trimmedFile.split(separator: "/").map(String.init)
@@ -509,16 +522,16 @@ enum InstructionManager {
         1. Query installed instructions before and during the work.
            Treat the selected target directory's .agent-context/manifest.json as the package entrypoint. Resolve the selected target directory as the directory that contains FILE_TARGET, not relative to the project root or current working directory.
 
-           Read the manifest first, then read the instruction registry named by entrypoints.instruction_registry, normally .agent-context/registry.json. Inspect each instruction's trigger first, then its name, description, version, and tags if more context is needed, to decide whether it should activate for the current task. Do not eagerly read every spell body. When an instruction's trigger matches the current task, read ~/.spellbook/spells/<uid-or-localID>/<version>/SPEC.md and apply that instruction.
+           Read the manifest first, then read the instruction registry named by entrypoints.instruction_registry, normally .agent-context/master.json. Inspect each instruction's trigger first, then its name, description, version, and tags if more context is needed, to decide whether it should activate for the current task. Do not eagerly read every spell body. When an instruction's trigger matches the current task, read ~/.spellbook/spells/<uid-or-localID>/<version>/SPEC.md and apply that instruction.
 
-           Staged entries are review-only. Do not read or activate ~/.spellbook/registry/staging.json during task execution.
+           Suggested entries are review-only. Do not read or activate ~/.spellbook/registry/staging.json during task execution.
 
         2. Track new reusable instructions while working.
-           When you identify a durable instruction, workflow convention, project setup requirement, review rule, or reusable feedback pattern, write a staged index entry to ~/.spellbook/registry/staging.json, and write the full markdown instructions to ~/.spellbook/spells/<localID>/1/SPEC.md. Capture broadly useful instructions, not only review guidance; for example, a preference that web apps should be set up so they are deployable to Cloudflare is a valid instruction.
+           When you identify a durable instruction, workflow convention, project setup requirement, review rule, or reusable feedback pattern, write a suggestion index entry to ~/.spellbook/registry/staging.json, and write the full markdown instructions to ~/.spellbook/spells/<localID>/1/SPEC.md. Capture broadly useful instructions, not only review guidance; for example, a preference that web apps should be set up so they are deployable to Cloudflare is a valid instruction.
 
-           During capture, do not modify .agent-context/registry.json and do not overwrite existing spell versions unless explicitly asked.
+           During capture, do not modify .agent-context/master.json and do not overwrite existing spell versions unless explicitly asked.
 
-        Keep .agent-context/manifest.json, .agent-context/registry.json, ~/.spellbook/registry/staging.json, and ~/.spellbook/registry/archive.json valid JSON.
+        Keep .agent-context/manifest.json, .agent-context/master.json, ~/.spellbook/registry/library.json, ~/.spellbook/registry/staging.json, and ~/.spellbook/registry/archive.json valid JSON.
 
         Example manifest:
 
@@ -529,12 +542,13 @@ enum InstructionManager {
           "type": "agent-context-package",
           "version": "0.1.0",
           "entrypoints": {
-            "instruction_registry": "registry.json",
+            "instruction_registry": "master.json",
+            "installed_library": "~/.spellbook/registry/library.json",
             "staged_instructions": "~/.spellbook/registry/staging.json",
             "archived_instructions": "~/.spellbook/registry/archive.json"
           },
           "paths": {
-            "repo_registry": "registry.json",
+            "repo_registry": "master.json",
             "global_registry": "~/.spellbook/registry/",
             "spell_store": "~/.spellbook/spells/"
           },

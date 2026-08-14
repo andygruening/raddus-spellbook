@@ -47,19 +47,20 @@ npm run deploy:web:preview
 
 ## Local Agent Context Files
 
-Each target directory stores an `.agent-context/` package next to its `AGENTS.md`, `AGENT.md`, or `CLAUDE.md` file:
+Each target directory stores an `.agent-context/` package next to its `AGENTS.md`, `AGENT.md`, or `CLAUDE.md` file. The project registry contains the installed instructions attached to that specific target:
 
 ```text
 .agent-context/
   manifest.json
-  registry.json
+  master.json
 ```
 
-The machine-local Spellbook store keeps review queues and versioned spell bodies:
+The machine-local Spellbook store keeps the global installed library, review queues, and versioned spell bodies:
 
 ```text
 ~/.spellbook/
   registry/
+    library.json
     staging.json
     archive.json
   spells/
@@ -68,7 +69,7 @@ The machine-local Spellbook store keeps review queues and versioned spell bodies
         SPEC.md
 ```
 
-The repo-local registry uses this lightweight shape:
+The global library and project registries use this lightweight shape:
 
 ```json
 {

@@ -115,6 +115,22 @@ struct Spell: Identifiable, Codable, Equatable {
             && normalized(description) == normalized(other.description)
     }
 
+    func hasSameIdentity(as other: Spell) -> Bool {
+        if id == other.id {
+            return true
+        }
+
+        if let uid, let otherUID = other.uid, uid == otherUID {
+            return true
+        }
+
+        if let localID, let otherLocalID = other.localID, localID == otherLocalID {
+            return true
+        }
+
+        return false
+    }
+
     static func slug(for value: String) -> String {
         let normalized = value
             .lowercased()

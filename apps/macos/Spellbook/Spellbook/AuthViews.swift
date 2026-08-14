@@ -47,9 +47,9 @@ private struct WelcomeView: View {
                 WelcomeWorkflowColumn(
                     title: "Review",
                     steps: [
-                        "New ideas land in Staged",
+                        "New ideas land in Suggestions",
                         "You approve, edit, or archive",
-                        "Installed spells guide future work"
+                        "Instructions guide future work"
                     ]
                 )
 
