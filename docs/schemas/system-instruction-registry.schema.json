@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spellbook.raddus.dev/schemas/system-instruction-registry.schema.json",
+  "title": "Spellbook System Instruction Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "instructions"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "instructions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/instruction"
+      }
+    }
+  },
+  "$defs": {
+    "instruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uid", "version", "name", "description", "trigger"],
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trigger": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

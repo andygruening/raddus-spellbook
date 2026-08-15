@@ -106,6 +106,17 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
     return setSpellStar(env, decodeURIComponent(starMatch[1]), user.email, request.method === "POST");
   }
 
+  const spellVersionMatch = url.pathname.match(/^\/api\/spells\/([^/]+)\/versions\/(\d+)$/);
+  if (request.method === "GET" && spellVersionMatch?.[1] && spellVersionMatch?.[2]) {
+    const user = await authenticateOptional(request, env.SPELLBOOK_JWT_SECRET);
+    return getPublicSpellVersion(
+      env,
+      decodeURIComponent(spellVersionMatch[1]),
+      Number(spellVersionMatch[2]),
+      user?.email ?? null
+    );
+  }
+
   const spellMatch = url.pathname.match(/^\/api\/spells\/([^/]+)$/);
   if (request.method === "GET" && spellMatch?.[1]) {
     const user = await authenticateOptional(request, env.SPELLBOOK_JWT_SECRET);
@@ -276,6 +287,24 @@ async function getPublicSpell(env: SpellbookEnv, uid: string, viewerEmail: strin
   return json({ spell: rowToSpell(spell) });
 }
 
+async function getPublicSpellVersion(
+  env: SpellbookEnv,
+  uid: string,
+  version: number,
+  viewerEmail: string | null
+): Promise<Response> {
+  if (!Number.isInteger(version) || version < 1) {
+    throw new AppError("Spell not found.", 404);
+  }
+
+  const spell = await findSpellVersionByUID(env, uid, version, viewerEmail);
+  if (!spell || spell.published !== 1) {
+    throw new AppError("Spell not found.", 404);
+  }
+
+  return json({ spell: rowToSpell(spell) });
+}
+
 async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: string): Promise<Response> {
   const db = requireDatabase(env);
   const input = parseSpellInput(await readJsonObject(request));
@@ -291,24 +320,44 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
       throw new AppError("Only the creator can update this spell.", 403);
     }
 
-    await db.prepare(
-      `UPDATE spells
-       SET name = ?, description = ?, trigger = ?, file = ?, content = ?, tags_json = ?, version = version + 1, published = 1, updated_at = ?,
-           published_at = COALESCE(published_at, ?)
-       WHERE id = ?`
-    )
-      .bind(
-        input.name,
-        input.description,
-        input.trigger,
-        input.file,
-        input.content,
-        JSON.stringify(input.tags),
-        now,
-        now,
-        input.uid
+    const nextVersion = existing.version + 1;
+    await db.batch([
+      db.prepare(
+        `UPDATE spells
+         SET name = ?, description = ?, trigger = ?, file = ?, content = ?, tags_json = ?, version = ?, published = 1, updated_at = ?,
+             published_at = COALESCE(published_at, ?)
+         WHERE id = ?`
       )
-      .run();
+        .bind(
+          input.name,
+          input.description,
+          input.trigger,
+          input.file,
+          input.content,
+          JSON.stringify(input.tags),
+          nextVersion,
+          now,
+          now,
+          input.uid
+        ),
+      db.prepare(
+        `INSERT INTO spell_versions (
+           spell_id, version, name, description, trigger, file, content, tags_json, created_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          input.uid,
+          nextVersion,
+          input.name,
+          input.description,
+          input.trigger,
+          input.file,
+          input.content,
+          JSON.stringify(input.tags),
+          now
+        )
+    ]);
 
     const updated = await findSpellByUID(env, input.uid, ownerEmail);
     if (!updated) {
@@ -319,27 +368,44 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
   }
 
   const uid = crypto.randomUUID();
-  await db.prepare(
-    `INSERT INTO spells (
-       id, name, description, trigger, file, content, version, tags_json, owner_email,
-       published, created_at, updated_at, published_at
-     )
-     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?, ?, ?)`
-  )
-    .bind(
-      uid,
-      input.name,
-      input.description,
-      input.trigger,
-      input.file,
-      input.content,
-      JSON.stringify(input.tags),
-      ownerEmail,
-      now,
-      now,
-      now
+  await db.batch([
+    db.prepare(
+      `INSERT INTO spells (
+         id, name, description, trigger, file, content, version, tags_json, owner_email,
+         published, created_at, updated_at, published_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?, ?, ?)`
     )
-    .run();
+      .bind(
+        uid,
+        input.name,
+        input.description,
+        input.trigger,
+        input.file,
+        input.content,
+        JSON.stringify(input.tags),
+        ownerEmail,
+        now,
+        now,
+        now
+      ),
+    db.prepare(
+      `INSERT INTO spell_versions (
+         spell_id, version, name, description, trigger, file, content, tags_json, created_at
+       )
+       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(
+        uid,
+        input.name,
+        input.description,
+        input.trigger,
+        input.file,
+        input.content,
+        JSON.stringify(input.tags),
+        now
+      )
+  ]);
 
   const created = await findSpellByUID(env, uid, ownerEmail);
   if (!created) {
@@ -362,6 +428,7 @@ async function deleteSpell(env: SpellbookEnv, uid: string, ownerEmail: string): 
 
   await db.batch([
     db.prepare("DELETE FROM spell_stars WHERE spell_id = ?").bind(uid),
+    db.prepare("DELETE FROM spell_versions WHERE spell_id = ?").bind(uid),
     db.prepare("DELETE FROM spells WHERE id = ?").bind(uid)
   ]);
   return json({ ok: true });
@@ -414,6 +481,35 @@ async function findSpellByUID(env: SpellbookEnv, uid: string, viewerEmail: strin
      LIMIT 1`
   )
     .bind(viewerEmail, viewerEmail, uid)
+    .first<SpellRow>();
+}
+
+async function findSpellVersionByUID(
+  env: SpellbookEnv,
+  uid: string,
+  version: number,
+  viewerEmail: string | null = null
+): Promise<SpellRow | null> {
+  const db = requireDatabase(env);
+  return db.prepare(
+    `SELECT spells.id, spell_versions.name, spell_versions.description, spell_versions.trigger,
+            spell_versions.file, spell_versions.content, spell_versions.version, spell_versions.tags_json,
+            spells.owner_email, spells.published, spells.created_at, spells.updated_at, spells.published_at,
+            (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
+            CASE
+              WHEN ? IS NOT NULL AND EXISTS (
+                SELECT 1 FROM spell_stars
+                WHERE spell_stars.spell_id = spells.id AND spell_stars.owner_email = ?
+              )
+              THEN 1
+              ELSE 0
+            END AS starred_by_viewer
+     FROM spells
+     JOIN spell_versions ON spell_versions.spell_id = spells.id
+     WHERE spells.id = ? AND spell_versions.version = ?
+     LIMIT 1`
+  )
+    .bind(viewerEmail, viewerEmail, uid, version)
     .first<SpellRow>();
 }
 

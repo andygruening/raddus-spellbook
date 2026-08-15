@@ -22,7 +22,7 @@ struct LocalSpellsView: View {
                     Image(systemName: "plus")
                         .frame(width: 28, height: 28)
                 }
-                .help("Create a local spell.")
+                .help("Create and publish an instruction.")
 
                 Button {
                     refresh()
@@ -60,21 +60,18 @@ struct LocalSpellsView: View {
         .spellbookErrorAlert(message: $errorMessage)
         .sheet(isPresented: $isShowingNewSpellForm) {
             SpellFormView(mode: .create, onSave: { spell in
-                try create(spell)
+                try await create(spell)
             })
         }
         .sheet(item: $editingSpell) { spell in
             SpellFormView(
                 mode: .local(spell, editable: canEdit(spell)),
                 onSave: canEdit(spell) ? { updatedSpell in
-                    try update(updatedSpell)
+                    try await publishFromDetail(updatedSpell, replacing: spell)
                 } : nil,
                 onPublish: canPublish(spell) ? { updatedSpell in
                     try await publishFromDetail(updatedSpell, replacing: spell)
-                } : nil,
-                onArchive: { archivedSpell in
-                    try archive(archivedSpell)
-                }
+                } : nil
             )
         }
         .onAppear {
@@ -114,7 +111,6 @@ struct LocalSpellsView: View {
         }
 
         do {
-            try localStore.updateLocal(spell)
             let remote = try await SpellbookAPI.shared.publish(spell: spell, token: session.token)
             try localStore.updateAfterPublish(localIdentifier: originalSpell.id, remoteSpell: remote, signedInEmail: session.email)
             if let uid = remote.uid {
@@ -122,16 +118,6 @@ struct LocalSpellsView: View {
             }
             errorMessage = nil
             editingSpell = nil
-        } catch SpellbookError.missingPublishedSpell {
-            do {
-                try await republishMissingRemote(spell, replacing: originalSpell, session: session)
-            } catch SpellbookError.expiredSession {
-                sessionModel.clearExpiredSession()
-                throw SpellbookError.expiredSession
-            } catch {
-                errorMessage = error.localizedDescription
-                throw error
-            }
         } catch SpellbookError.expiredSession {
             sessionModel.clearExpiredSession()
             throw SpellbookError.expiredSession
@@ -141,37 +127,22 @@ struct LocalSpellsView: View {
         }
     }
 
-    private func republishMissingRemote(_ spell: Spell, replacing originalSpell: Spell, session: SpellbookSession) async throws {
-        guard let staleUID = originalSpell.uid ?? spell.uid else {
-            throw SpellbookError.missingPublishedSpell
+    private func create(_ spell: Spell) async throws {
+        guard let session = sessionModel.session else {
+            throw SpellbookError.message("Sign in to publish this instruction.")
         }
 
-        var localOnly = spell
-        localOnly.uid = nil
-        localOnly.ownerEmail = nil
-        localOnly.publishedAt = nil
-        localOnly.starCount = 0
-        localOnly.starredByMe = false
-
-        guard let resetSpell = try localStore.markUnpublished(uid: staleUID, replacement: localOnly) else {
-            throw SpellbookError.message("That local spell could not be reconciled with the published registry.")
-        }
-
-        let remote = try await SpellbookAPI.shared.publish(spell: resetSpell, token: session.token)
-        try localStore.updateAfterPublish(localIdentifier: resetSpell.id, remoteSpell: remote, signedInEmail: session.email)
-        publishedSpellsByUID.removeValue(forKey: staleUID)
-        if let uid = remote.uid {
-            publishedSpellsByUID[uid] = remote
-        }
-        errorMessage = nil
-        editingSpell = nil
-    }
-
-    private func create(_ spell: Spell) throws {
         do {
-            try localStore.upsertLocal(spell)
+            let remote = try await SpellbookAPI.shared.publish(spell: spell, token: session.token)
+            try localStore.updateAfterPublish(localIdentifier: spell.id, remoteSpell: remote, signedInEmail: session.email)
+            if let uid = remote.uid {
+                publishedSpellsByUID[uid] = remote
+            }
             errorMessage = nil
             isShowingNewSpellForm = false
+        } catch SpellbookError.expiredSession {
+            sessionModel.clearExpiredSession()
+            throw SpellbookError.expiredSession
         } catch {
             errorMessage = error.localizedDescription
             throw error
@@ -181,17 +152,6 @@ struct LocalSpellsView: View {
     private func update(_ spell: Spell) throws {
         do {
             try localStore.updateLocal(spell)
-            errorMessage = nil
-            editingSpell = nil
-        } catch {
-            errorMessage = error.localizedDescription
-            throw error
-        }
-    }
-
-    private func archive(_ spell: Spell) throws {
-        do {
-            try localStore.removeLocal(spell)
             errorMessage = nil
             editingSpell = nil
         } catch {
@@ -245,10 +205,7 @@ struct LocalSpellsView: View {
                 }
 
                 await MainActor.run {
-                    for uid in unpublishedUIDs {
-                        _ = try? localStore.markUnpublished(uid: uid)
-                        publishedSpellsByUID.removeValue(forKey: uid)
-                    }
+                    for uid in unpublishedUIDs { publishedSpellsByUID.removeValue(forKey: uid) }
                     for (uid, spell) in matchingSpells {
                         publishedSpellsByUID[uid] = spell
                     }
@@ -290,178 +247,6 @@ struct LocalSpellsView: View {
                     errorMessage = error.localizedDescription
                 }
             }
-        }
-    }
-}
-
-struct StagingSpellsView: View {
-    @EnvironmentObject private var localStore: LocalSpellStore
-    @State private var viewingSpell: Spell?
-    @State private var errorMessage: String?
-
-    var body: some View {
-        PageContainer(
-            title: "Suggestions",
-            subtitle: "Instructions suggested by the agent while it works."
-        ) {
-            Button {
-                refresh()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 28, height: 28)
-            }
-            .help("Refresh")
-        } content: {
-            if localStore.stagingSpells.isEmpty {
-                EmptyState(title: "No suggestions", message: "Agent-captured instructions waiting for approval will appear here.")
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(localStore.stagingSpells) { spell in
-                            SpellCard(spell: spell, onOpen: {
-                                viewingSpell = spell
-                            })
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-        .spellbookErrorAlert(message: $errorMessage)
-        .sheet(item: $viewingSpell) { spell in
-            StagedSpellDetailView(
-                spell: spell,
-                onApprove: { stagedSpell in
-                    try localStore.approveStaged(stagedSpell)
-                    viewingSpell = nil
-                },
-                onArchive: { stagedSpell in
-                    try localStore.removeStaged(stagedSpell)
-                    viewingSpell = nil
-                }
-            )
-        }
-        .onAppear {
-            refresh()
-        }
-    }
-
-    private func refresh() {
-        do {
-            try localStore.refresh()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-}
-
-struct StagedSpellDetailView: View {
-    var spell: Spell
-    var onApprove: (Spell) throws -> Void
-    var onArchive: (Spell) throws -> Void
-
-    var body: some View {
-        InstructionDetailView(
-            spell: spell,
-            actions: [
-                InstructionDetailAction(
-                    title: "Archive",
-                    systemImage: "archivebox",
-                    role: .destructive,
-                    action: { archivedSpell in
-                        try onArchive(archivedSpell)
-                    }
-                ),
-                InstructionDetailAction(
-                    title: "Approve",
-                    systemImage: "checkmark.circle",
-                    role: nil,
-                    style: .prominent,
-                    action: { approvedSpell in
-                        try onApprove(approvedSpell)
-                    }
-                )
-            ]
-        )
-    }
-}
-
-struct ArchivedSpellsView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var localStore: LocalSpellStore
-    @State private var viewingSpell: Spell?
-    @State private var errorMessage: String?
-
-    var body: some View {
-        PageContainer(
-            title: "Archived Instructions",
-            subtitle: "Instructions and suggestions you archived."
-        ) {
-            HStack(spacing: 8) {
-                Button {
-                    refresh()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .frame(width: 28, height: 28)
-                }
-                .help("Refresh")
-
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .frame(width: 28, height: 28)
-                }
-                .keyboardShortcut(.cancelAction)
-                .help("Close")
-            }
-        } content: {
-            if localStore.archivedSpells.isEmpty {
-                EmptyState(title: "No archived instructions", message: "Archived instructions and suggestions will appear here.")
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(localStore.archivedSpells) { spell in
-                            SpellCard(spell: spell, onOpen: {
-                                viewingSpell = spell
-                            })
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-        .spellbookErrorAlert(message: $errorMessage)
-        .sheet(item: $viewingSpell) { spell in
-            InstructionDetailView(
-                spell: spell,
-                actions: [
-                    InstructionDetailAction(
-                        title: "Restore",
-                        systemImage: "arrow.uturn.backward",
-                        role: nil,
-                        style: .prominent,
-                        action: { archivedSpell in
-                            try localStore.restoreArchived(archivedSpell)
-                            viewingSpell = nil
-                        }
-                    )
-                ]
-            )
-        }
-        .onAppear {
-            refresh()
-        }
-        .frame(width: 820, height: 700)
-    }
-
-    private func refresh() {
-        do {
-            try localStore.refresh()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 }
@@ -1036,7 +821,7 @@ private struct InstructionFlowView: View {
         let existing = mode.existingSpell
         return Spell(
             uid: existing?.uid,
-            localID: existing?.localID,
+            localID: nil,
             name: trimmed(name),
             description: trimmed(spellDescription),
             trigger: trimmed(trigger),
@@ -1072,7 +857,6 @@ struct SpellFormView: View {
     var onSave: ((Spell) async throws -> Void)?
     var onPublish: ((Spell) async throws -> Void)?
     var onInstall: ((Spell) throws -> Void)?
-    var onArchive: ((Spell) throws -> Void)?
     var onDelete: ((Spell) async throws -> Void)?
 
     @State private var isShowingEditFlow = false
@@ -1082,14 +866,12 @@ struct SpellFormView: View {
         onSave: ((Spell) async throws -> Void)? = nil,
         onPublish: ((Spell) async throws -> Void)? = nil,
         onInstall: ((Spell) throws -> Void)? = nil,
-        onArchive: ((Spell) throws -> Void)? = nil,
         onDelete: ((Spell) async throws -> Void)? = nil
     ) {
         self.mode = mode
         self.onSave = onSave
         self.onPublish = onPublish
         self.onInstall = onInstall
-        self.onArchive = onArchive
         self.onDelete = onDelete
     }
 
@@ -1112,23 +894,6 @@ struct SpellFormView: View {
 
     private func detailActions(for spell: Spell) -> [InstructionDetailAction] {
         var actions: [InstructionDetailAction] = []
-
-        if let onArchive {
-            let projectNames = localStore.projectTargets(containing: spell).map(\.name)
-            let archiveHelp = projectNames.isEmpty
-                ? "Archive instruction"
-                : "Remove this instruction from \(projectNames.joined(separator: ", ")) before archiving."
-            actions.append(InstructionDetailAction(
-                title: "Archive",
-                systemImage: "archivebox",
-                role: .destructive,
-                isDisabled: !projectNames.isEmpty,
-                help: archiveHelp,
-                action: { archivedSpell in
-                    try onArchive(archivedSpell)
-                }
-            ))
-        }
 
         if let onDelete {
             actions.append(InstructionDetailAction(
@@ -1445,12 +1210,10 @@ struct PublishedSpellsView: View {
 
         do {
             try await SpellbookAPI.shared.delete(uid: uid, token: token)
-            _ = try? localStore.markUnpublished(uid: uid)
             spells.removeAll { $0.uid == uid }
             errorMessage = nil
             viewingSpell = nil
         } catch SpellbookError.missingPublishedSpell {
-            _ = try? localStore.markUnpublished(uid: uid)
             spells.removeAll { $0.uid == uid }
             errorMessage = nil
             viewingSpell = nil
@@ -1525,8 +1288,8 @@ struct ProjectsView: View {
             }
         }
         .sheet(isPresented: $isShowingAddTargetForm) {
-            TargetFormView(mode: .add) { directoryURL, instructionFileName, name in
-                try localStore.addTarget(directoryURL: directoryURL, instructionFileName: instructionFileName, name: name)
+            TargetFormView(mode: .add) { directoryURL, harnessFileNames, name in
+                try localStore.addTarget(directoryURL: directoryURL, harnessFileNames: harnessFileNames, name: name)
                 if let target = localStore.targets.first(where: { $0.directoryPath == directoryURL.path(percentEncoded: false) }) {
                     expandedTargetIDs.insert(target.id)
                     persistExpandedTargetIDs()
@@ -1535,8 +1298,8 @@ struct ProjectsView: View {
             }
         }
         .sheet(item: $editingTarget) { target in
-            TargetFormView(mode: .edit(target), initialDirectoryURL: localStore.directoryURL(for: target)) { directoryURL, instructionFileName, name in
-                try localStore.updateTarget(target, directoryURL: directoryURL, instructionFileName: instructionFileName, name: name)
+            TargetFormView(mode: .edit(target), initialDirectoryURL: localStore.directoryURL(for: target)) { directoryURL, harnessFileNames, name in
+                try localStore.updateTarget(target, directoryURL: directoryURL, harnessFileNames: harnessFileNames, name: name)
                 statusMessage = "Updated \(name)."
             }
         }
@@ -1937,27 +1700,65 @@ struct ProjectInstructionPickerView: View {
 struct SettingsView: View {
     @EnvironmentObject private var localStore: LocalSpellStore
     @EnvironmentObject private var sessionModel: SessionModel
-    @State private var isShowingArchive = false
 
     var body: some View {
-        PageContainer(title: "Settings", subtitle: "Account") {
-            Button {
-                isShowingArchive = true
-            } label: {
-                Label("Archive", systemImage: "archivebox")
+        PageContainer(title: "Settings", subtitle: "Account and diagnostics") {
+            HStack(spacing: 8) {
+                Button {
+                    repair()
+                } label: {
+                    Label("Repair", systemImage: "wrench.and.screwdriver")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Repair the system store")
+
+                Button {
+                    refresh()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .help("Refresh diagnostics")
             }
-            .help("Open archived instructions")
         } content: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     accountSection
+                    systemStoreSection
+                    diagnosticsSection
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .sheet(isPresented: $isShowingArchive) {
-            ArchivedSpellsView()
-                .environmentObject(localStore)
+    }
+
+    private var systemStoreSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("System Store")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label(SpellbookUserStoreLayout.rootURL.path(percentEncoded: false), systemImage: "folder")
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+
+                if let sandboxURL = SpellbookUserStoreLayout.sandboxContainerRootURL {
+                    Label(sandboxURL.path(percentEncoded: false), systemImage: "shippingbox")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .textSelection(.enabled)
+                }
+
+                if let lastError = localStore.lastError {
+                    Text(lastError)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(14)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.18), lineWidth: 1))
         }
     }
 
@@ -1982,6 +1783,63 @@ struct SettingsView: View {
             .background(Color(nsColor: .controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.18), lineWidth: 1))
+        }
+    }
+
+    private var diagnosticsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Diagnostics")
+                .font(.headline)
+
+            if localStore.diagnostics.isEmpty {
+                EmptyState(title: "No diagnostics", message: "Startup scans did not find Spellbook target problems.")
+                    .frame(minHeight: 120)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(localStore.diagnostics) { diagnostic in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                SpellPill(text: diagnostic.severity, tint: diagnostic.severity == "error" ? .red : .orange)
+                                Text(diagnostic.type)
+                                    .font(.callout.weight(.semibold))
+                                Spacer()
+                            }
+
+                            Text(diagnostic.message)
+                                .foregroundStyle(.secondary)
+
+                            if let targetRoot = diagnostic.targetRoot {
+                                Text(targetRoot)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(12)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.16), lineWidth: 1))
+                    }
+                }
+            }
+        }
+    }
+
+    private func refresh() {
+        do {
+            try localStore.refresh()
+            localStore.lastError = nil
+        } catch {
+            localStore.lastError = error.localizedDescription
+        }
+    }
+
+    private func repair() {
+        do {
+            try localStore.repairSystemStore()
+            localStore.lastError = nil
+        } catch {
+            localStore.lastError = error.localizedDescription
         }
     }
 }
@@ -2022,20 +1880,20 @@ struct TargetFormView: View {
     @Environment(\.dismiss) private var dismiss
 
     var mode: TargetFormMode
-    var onSave: (URL, String, String) throws -> Void
+    var onSave: (URL, [String], String) throws -> Void
 
     @State private var directoryURL: URL?
     @State private var targetName = ""
-    @State private var instructionFileName = InstructionManager.supportedFiles[0]
+    @State private var selectedHarnessFiles: Set<String> = [InstructionManager.supportedFiles[0]]
     @State private var errorMessage: String?
 
-    init(mode: TargetFormMode, initialDirectoryURL: URL? = nil, onSave: @escaping (URL, String, String) throws -> Void) {
+    init(mode: TargetFormMode, initialDirectoryURL: URL? = nil, onSave: @escaping (URL, [String], String) throws -> Void) {
         self.mode = mode
         self.onSave = onSave
         let existingTarget = mode.existingTarget
         _directoryURL = State(initialValue: initialDirectoryURL)
         _targetName = State(initialValue: existingTarget?.name ?? "")
-        _instructionFileName = State(initialValue: existingTarget?.instructionFileName ?? InstructionManager.supportedFiles[0])
+        _selectedHarnessFiles = State(initialValue: Set(existingTarget?.harnesses.map(\.file) ?? [InstructionManager.supportedFiles[0]]))
     }
 
     var body: some View {
@@ -2060,12 +1918,24 @@ struct TargetFormView: View {
                         .lineLimit(1)
                 }
 
-                Picker("File to write", selection: $instructionFileName) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Harness files")
+                        .font(.callout.weight(.medium))
+
                     ForEach(InstructionManager.supportedFiles, id: \.self) { fileName in
-                        Text(fileName).tag(fileName)
+                        Toggle(isOn: binding(for: fileName)) {
+                            HStack(spacing: 8) {
+                                Text(fileName)
+
+                                if let directoryURL {
+                                    let exists = FileManager.default.fileExists(atPath: directoryURL.appending(path: fileName).path(percentEncoded: false))
+                                    SpellPill(text: exists ? "exists" : "will create", tint: exists ? .green : .orange)
+                                }
+                            }
+                        }
+                        .toggleStyle(.checkbox)
                     }
                 }
-                .frame(width: 260)
 
                 LabeledContent("Project name") {
                     TextField("Project name", text: $targetName)
@@ -2086,7 +1956,7 @@ struct TargetFormView: View {
                     Label(mode.buttonTitle, systemImage: "checkmark")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(directoryURL == nil || trimmed(targetName).isEmpty)
+                .disabled(directoryURL == nil || trimmed(targetName).isEmpty || selectedHarnessFiles.isEmpty)
             }
         }
         .padding(24)
@@ -2110,7 +1980,7 @@ struct TargetFormView: View {
         if trimmed(targetName).isEmpty {
             targetName = url.lastPathComponent.isEmpty ? url.path(percentEncoded: false) : url.lastPathComponent
         }
-        instructionFileName = existingSupportedFile(in: url) ?? instructionFileName
+        selectedHarnessFiles = Set(InstructionManager.defaultHarnessFileNames(in: url))
         errorMessage = nil
     }
 
@@ -2126,18 +1996,33 @@ struct TargetFormView: View {
             return
         }
 
+        guard !selectedHarnessFiles.isEmpty else {
+            errorMessage = "Enable at least one harness file."
+            return
+        }
+
         do {
-            try onSave(directoryURL, instructionFileName, name)
+            try onSave(directoryURL, orderedSelectedHarnessFiles(), name)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func existingSupportedFile(in directoryURL: URL) -> String? {
-        InstructionManager.supportedFiles.first { fileName in
-            FileManager.default.fileExists(atPath: directoryURL.appending(path: fileName).path(percentEncoded: false))
+    private func binding(for fileName: String) -> Binding<Bool> {
+        Binding {
+            selectedHarnessFiles.contains(fileName)
+        } set: { isSelected in
+            if isSelected {
+                selectedHarnessFiles.insert(fileName)
+            } else {
+                selectedHarnessFiles.remove(fileName)
+            }
         }
+    }
+
+    private func orderedSelectedHarnessFiles() -> [String] {
+        InstructionManager.supportedFiles.filter { selectedHarnessFiles.contains($0) }
     }
 
     private func trimmed(_ value: String) -> String {
@@ -2214,13 +2099,16 @@ struct TargetInstructionReviewView: View {
                         spacing: 10
                     ) {
                         PreviewValue(label: "Target", value: preview.targetInstructionURL.path(percentEncoded: false))
+                        PreviewValue(label: "Agent", value: preview.agent)
                         PreviewValue(label: "Instruction", value: preview.isInstalled ? "Installed" : "Not installed")
                         PreviewValue(label: "Block", value: preview.action.rawValue)
                         PreviewValue(label: ".agent-context", value: preview.packageURL.path(percentEncoded: false))
                         PreviewValue(label: "manifest.json", value: preview.manifestExists ? "Exists" : "Will create")
-                        PreviewValue(label: "master.json", value: preview.registryExists ? "Exists" : "Will create")
-                        PreviewValue(label: "~/.spellbook/registry/staging.json", value: preview.stagingExists ? "Exists" : "Will create")
-                        PreviewValue(label: "~/.spellbook/registry/archive.json", value: preview.archiveExists ? "Exists" : "Will create")
+                        PreviewValue(label: preview.registryURL.lastPathComponent, value: preview.registryExists ? "Exists" : "Will create")
+                        PreviewValue(label: "~/.spellbook/registry/registry.json", value: preview.systemRegistryExists ? "Exists" : "Will create")
+                        PreviewValue(label: "~/.spellbook/registry/targets.json", value: preview.targetsExists ? "Exists" : "Will create")
+                        PreviewValue(label: "~/.spellbook/registry/errors.json", value: preview.errorsExists ? "Exists" : "Will create")
+                        PreviewValue(label: "Resolver", value: preview.resolverExists ? "Executable" : "Will install")
                     }
 
                     ScrollView {
@@ -2265,12 +2153,12 @@ struct TargetInstructionReviewView: View {
     }
 
     private func applyInstruction() {
-        guard let preview else {
-            return
-        }
-
         do {
-            try InstructionManager.apply(preview)
+            guard let directoryURL = localStore.directoryURL(for: target) else {
+                throw SpellbookError.message("Choose the target directory again.")
+            }
+
+            try InstructionManager.apply(directoryURL: directoryURL, harnessFileNames: target.harnesses.map(\.file))
             try localStore.refresh()
             errorMessage = nil
             reviewInstruction()
@@ -2286,7 +2174,7 @@ struct TargetInstructionReviewView: View {
                 throw SpellbookError.message("Choose the target directory again.")
             }
 
-            try InstructionManager.removeManagedBlock(from: target.instructionURL(in: directoryURL))
+            try InstructionManager.removeManagedBlocks(from: directoryURL, harnesses: target.harnesses)
             try localStore.refresh()
             errorMessage = nil
             reviewInstruction()

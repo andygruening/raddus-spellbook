@@ -3,7 +3,6 @@ import SwiftUI
 enum SpellbookPage: String, CaseIterable, Identifiable {
     case local
     case projects
-    case staging
     case published
     case settings
 
@@ -13,7 +12,6 @@ enum SpellbookPage: String, CaseIterable, Identifiable {
         switch self {
         case .local: "Instructions"
         case .projects: "Projects"
-        case .staging: "Suggestions"
         case .published: "Published"
         case .settings: "Settings"
         }
@@ -23,7 +21,6 @@ enum SpellbookPage: String, CaseIterable, Identifiable {
         switch self {
         case .local: "tray.full"
         case .projects: "folder"
-        case .staging: "tray.and.arrow.down"
         case .published: "globe"
         case .settings: "gearshape"
         }
@@ -51,7 +48,7 @@ struct MainView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     sidebarSection("Explore", pages: [.published])
 
-                    sidebarSection("My Library", pages: [.projects, .local, .staging])
+                    sidebarSection("My Library", pages: [.projects, .local])
 
                     sidebarSection("Other", pages: [.settings])
                 }
@@ -67,8 +64,6 @@ struct MainView: View {
                 LocalSpellsView()
             case .projects:
                 ProjectsView()
-            case .staging:
-                StagingSpellsView()
             case .published:
                 PublishedSpellsView()
             case .settings:

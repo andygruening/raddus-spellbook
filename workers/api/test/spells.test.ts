@@ -23,17 +23,17 @@ describe("spell helpers", () => {
     });
   });
 
-  it("accepts legacy spell file paths", () => {
-    expect(
+  it("rejects legacy spell file paths", () => {
+    expect(() =>
       parseSpellInput({
         name: "Legacy Path",
-        description: "Accept old local clients.",
-        trigger: "Use when validating legacy file paths.",
+        description: "Reject old local client paths.",
+        trigger: "Use when validating instruction file paths.",
         tags: ["review"],
         file: "spells/legacy-path.md",
         content: "# Legacy Path"
-      }).file
-    ).toBe("spells/legacy-path.md");
+      })
+    ).toThrow("Instruction files must live under ./instructions and end in .md.");
   });
 
   it("rejects files outside the instructions directory", () => {
@@ -46,7 +46,7 @@ describe("spell helpers", () => {
         file: "../bad.md",
         content: "# Bad Path"
       })
-    ).toThrow("Instruction files must live under ./instructions or legacy ./spells and end in .md.");
+    ).toThrow("Instruction files must live under ./instructions and end in .md.");
   });
 
   it("requires trigger metadata", () => {
@@ -68,7 +68,7 @@ describe("spell helpers", () => {
         name: "Review Boundaries",
         description: "Keep review feedback scoped.",
         trigger: "Use when reviewing code changes for scope drift.",
-        file: "spells/review-boundaries.md",
+        file: "instructions/review-boundaries.md",
         content: "# Review Boundaries",
         version: 4,
         tags_json: "[\"review\"]",
@@ -86,7 +86,7 @@ describe("spell helpers", () => {
       description: "Keep review feedback scoped.",
       trigger: "Use when reviewing code changes for scope drift.",
       tags: ["review"],
-      file: "spells/review-boundaries.md",
+      file: "instructions/review-boundaries.md",
       content: "# Review Boundaries",
       version: 4,
       ownerEmail: "ada@example.com",

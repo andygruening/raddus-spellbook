@@ -27,7 +27,7 @@ private struct WelcomeView: View {
             VStack(spacing: 10) {
                 Text("Raddus Spellbook")
                     .font(.system(size: 42, weight: .semibold))
-                Text("Spellbook captures durable review instructions from local agent work and shares the ones you publish.")
+                Text("Spellbook installs versioned agent instructions into local projects and shares the ones you publish.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -38,18 +38,18 @@ private struct WelcomeView: View {
                 WelcomeWorkflowColumn(
                     title: "Capture",
                     steps: [
-                        "Turn feedback into a spell",
-                        "Save it to a target",
-                        "Agents remember it next time"
+                        "Create or install an instruction",
+                        "Publish it for a stable uid",
+                        "Keep a versioned SPEC.md snapshot"
                     ]
                 )
 
                 WelcomeWorkflowColumn(
-                    title: "Review",
+                    title: "Install",
                     steps: [
-                        "New ideas land in Suggestions",
-                        "You approve, edit, or archive",
-                        "Instructions guide future work"
+                        "Choose a target directory",
+                        "Enable one or more harnesses",
+                        "Pin uid and version references"
                     ]
                 )
 

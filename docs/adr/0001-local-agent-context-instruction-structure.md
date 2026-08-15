@@ -15,9 +15,10 @@ The important split is between a target-level agent context package and a system
 
 - A target is any directory containing one or more supported agent harness files such as `AGENTS.md`, `AGENT.md`, or `CLAUDE.md`. It may be a normal project repository or a global harness directory.
 - A target-level package lives at `.agent-context/` next to the harness files and references only the instruction `uid`s and versions installed for each agent.
-- The system-level Spellbook store lives under `~/.spellbook/` and contains the locally installed versioned instruction library, versioned `SPEC.md` bodies, known targets, diagnostics, and resolver binary.
+- The system-level Spellbook store lives under `~/.spellbook/` and contains the locally installed versioned instruction library, versioned `SPEC.md` bodies, known targets, diagnostics, and a stable resolver symlink.
 - The macOS client is the only writer of durable Spellbook state. Agents may make chat-only suggestions for future instructions, but they must not write suggestion, staging, archive, registry, or diagnostic files.
 - Agent harnesses load instructions by calling the local resolver at `~/.spellbook/bin/spellbook-agent-context`. If the resolver is unavailable or cannot return usable JSON, the agent reports that in chat and continues without Spellbook-loaded instructions.
+- The resolver can merge instruction references from the current project target and from the harness root that invoked the task, such as a global Codex directory. Missing `.agent-context/` packages are treated as empty instruction sets, not diagnostics.
 
 ## Decision
 
@@ -239,15 +240,15 @@ The target-level `manifest.json` tells the resolver which registry belongs to ea
 
 The managed Spellbook block inside each harness file must stay small. For example, the Codex block should instruct the agent to:
 
-- Call `~/.spellbook/bin/spellbook-agent-context list-triggers --target <cwd> --agent codex` for every task.
+- Call `~/.spellbook/bin/spellbook-agent-context list-triggers --target <cwd> --harness-root <harness-root> --agent codex` for every task.
 - If the resolver is unavailable, exits before returning usable JSON, or returns malformed JSON, report that in chat and continue without Spellbook-loaded instructions.
 - Report any resolver diagnostics in chat.
 - Inspect returned triggers and decide which instructions apply.
-- For each matching instruction, call `~/.spellbook/bin/spellbook-agent-context read-spec --target <cwd> --agent codex --uid <uid> --version <version>`.
+- For each matching instruction, call `~/.spellbook/bin/spellbook-agent-context read-spec --target <cwd> --harness-root <harness-root> --agent codex --uid <uid> --version <version>`.
 - Apply the returned instruction content.
 - Suggest useful future instructions in chat only; do not write suggestion files or durable instruction state.
 
-The resolver accepts `--target` as any file or directory inside the intended target. It walks upward to the nearest `.agent-context/manifest.json`; the nearest package wins. If no package is found, Spellbook loading is skipped with a diagnostic. All resolver operations are target-scoped and agent-scoped, so `read-spec` must reject or diagnose a request for an instruction that is not pinned in that target's registry for that agent.
+The resolver accepts `--target` as any file or directory inside the intended project target and an optional `--harness-root` as the directory that contains the harness file whose instructions invoked the resolver. It walks upward from each path to the nearest `.agent-context/manifest.json`; the nearest package wins for that path. It then merges pinned `{ uid, version }` references from the project target first and the harness root second, deduplicating identical references. If either path has no `.agent-context/manifest.json`, or has no registry for the selected agent, that path contributes zero instructions and no diagnostic. All resolver operations are target-scoped, harness-scoped, and agent-scoped, so `read-spec` must reject or diagnose a request for an instruction that is not pinned in either loaded registry for that agent.
 
 The resolver returns JSON envelopes. `list-triggers` returns resolved trigger metadata plus diagnostics:
 
@@ -294,13 +295,13 @@ Resolver exit codes mean:
 - `0`: valid JSON returned; diagnostics may still be present.
 - `1`: operational error; valid JSON should be returned when possible.
 - `2`: invalid CLI usage.
-- `3`: target context not found.
+- `3`: reserved for older resolver versions; missing context packages now return `0` with no diagnostics.
 - `4`: malformed registry or manifest.
 - `5`: internal resolver error.
 
 If stdout is valid JSON, the harness reports diagnostics and continues according to the payload. If stdout is not valid JSON or the command is missing, the harness reports resolver failure and continues without Spellbook-loaded instructions.
 
-Missing pinned instruction versions are soft-skipped for the current agent run and included in resolver diagnostics for chat visibility. Malformed target registries or manifests are hard failures for Spellbook loading, but they do not block the user's task; the agent reports the problem and continues without Spellbook-loaded instructions.
+Missing pinned instruction versions are soft-skipped for the current agent run and included in resolver diagnostics for chat visibility. Missing `.agent-context/` packages, missing registries for the selected agent, and empty target registries are normal empty states and should not produce diagnostics. Malformed target registries or manifests are hard failures for that package, but they do not block the user's task; the agent reports the problem and continues without Spellbook-loaded instructions from that package.
 
 The macOS app is the authoritative writer of system diagnostics. It records known target harnesses in `~/.spellbook/registry/targets.json` when a user installs Spellbook into a target. On startup it scans known targets and rewrites `~/.spellbook/registry/errors.json` from scratch as a current-state diagnostics snapshot.
 
@@ -353,7 +354,7 @@ An example `errors.json` file is:
 }
 ```
 
-The startup scan should validate that each target path exists, each harness file exists, `.agent-context/manifest.json` exists and is valid, the manifest includes each selected agent registry, each agent registry exists and is valid, every `{ uid, version }` target reference exists in the system registry, every referenced `~/.spellbook/instructions/<uid>/<version>/SPEC.md` file exists, the resolver binary exists, and the managed Spellbook block is present in each harness file. If a target path no longer exists, the app records a stale-target diagnostic rather than deleting the target automatically.
+The startup scan should validate that each target path exists, each harness file exists, `.agent-context/manifest.json` exists and is valid, the manifest includes each selected agent registry, each agent registry exists and is valid, every `{ uid, version }` target reference exists in the system registry, every referenced `~/.spellbook/instructions/<uid>/<version>/SPEC.md` file exists, the resolver executable exists, and the managed Spellbook block is present in each harness file. If a target path no longer exists, the app records a stale-target diagnostic rather than deleting the target automatically.
 
 The macOS app flow for adding a target is:
 
@@ -365,6 +366,8 @@ The macOS app flow for adding a target is:
 - The app creates or updates an independent thin registry for each enabled agent.
 - The app inserts or updates the managed Spellbook block in each selected harness file.
 - The app records the target and harnesses in `targets.json`.
+
+The macOS app must install `~/.spellbook/bin/spellbook-agent-context` as a symlink to the signed native resolver helper inside the app bundle. This keeps the command path stable for agent harnesses while avoiding the sandbox/Gatekeeper behavior where copied executable files written by a sandboxed app can be quarantined. The repair flow must recreate the symlink when it points at an older or missing app bundle helper and validate that the bundled helper exists and is executable. The app should not copy the helper into `~/.spellbook/bin` or try to manage quarantine on the bundled helper from inside the sandbox.
 
 Multiple harness files in one target are supported. Each agent gets its own registry by default. The app may offer a convenience action to copy installed instruction references from another agent's registry, but registries remain independent afterward.
 

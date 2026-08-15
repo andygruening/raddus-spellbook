@@ -146,19 +146,19 @@ function parseTagsJson(value: string): string[] {
 
 function validatedFile(value: string): string {
   if (value.startsWith("/") || value.includes("..")) {
-    throw new AppError("Instruction files must live under ./instructions or legacy ./spells and end in .md.", 400);
+    throw new AppError("Instruction files must live under ./instructions and end in .md.", 400);
   }
 
   const parts = value.split("/");
   const [directory, fileName] = parts;
   if (
     parts.length !== 2 ||
-    (directory !== "instructions" && directory !== "spells") ||
+    directory !== "instructions" ||
     !fileName ||
     !fileName.endsWith(".md") ||
     fileName.length <= 3
   ) {
-    throw new AppError("Instruction files must live under ./instructions or legacy ./spells and end in .md.", 400);
+    throw new AppError("Instruction files must live under ./instructions and end in .md.", 400);
   }
 
   return value;

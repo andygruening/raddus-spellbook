@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spellbook.raddus.dev/schemas/targets.schema.json",
+  "title": "Spellbook Known Targets Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "targets"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/target"
+      }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "target_root", "agent_context", "harnesses", "added_at"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agent_context": {
+          "type": "string",
+          "minLength": 1
+        },
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/harness"
+          }
+        },
+        "added_at": {
+          "type": "string",
+          "minLength": 1
+        },
+        "last_scanned_at": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "file", "registry"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "enum": ["AGENTS.md", "AGENT.md", "CLAUDE.md"]
+        },
+        "registry": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

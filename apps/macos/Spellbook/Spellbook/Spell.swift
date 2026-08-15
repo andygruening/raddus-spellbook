@@ -16,7 +16,10 @@ struct Spell: Identifiable, Codable, Equatable {
     var starredByMe: Bool
 
     var id: String {
-        uid ?? localID ?? file
+        if let uid {
+            return "\(uid)@\(normalizedVersion)"
+        }
+        return localID ?? file
     }
 
     var storageID: String {
@@ -91,12 +94,11 @@ struct Spell: Identifiable, Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(uid, forKey: .uid)
-        try container.encodeIfPresent(localID, forKey: .localID)
         try container.encode(name, forKey: .name)
         try container.encode(description, forKey: .description)
         try container.encode(trigger, forKey: .trigger)
         try container.encode(tags, forKey: .tags)
-        if uid == nil && localID == nil && !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             try container.encode(file, forKey: .file)
         }
         try container.encode(normalizedVersion, forKey: .version)
@@ -104,7 +106,7 @@ struct Spell: Identifiable, Codable, Equatable {
 
     func matchesForInstall(_ other: Spell) -> Bool {
         if let uid, let otherUID = other.uid, uid == otherUID {
-            return true
+            return normalizedVersion == other.normalizedVersion
         }
 
         if let localID, let otherLocalID = other.localID, localID == otherLocalID {
@@ -121,7 +123,7 @@ struct Spell: Identifiable, Codable, Equatable {
         }
 
         if let uid, let otherUID = other.uid, uid == otherUID {
-            return true
+            return normalizedVersion == other.normalizedVersion
         }
 
         if let localID, let otherLocalID = other.localID, localID == otherLocalID {
@@ -240,22 +242,21 @@ struct Spell: Identifiable, Codable, Equatable {
 }
 
 struct SpellRegistry: Codable {
-    var version: Int
-    var agent: String?
+    var schemaVersion: Int
     var spells: [Spell]
 
-    static let empty = SpellRegistry(version: 1, agent: nil, spells: [])
+    static let empty = SpellRegistry(schemaVersion: 1, spells: [])
 
-    init(version: Int, agent: String? = nil, spells: [Spell]) {
-        self.version = version
-        self.agent = agent
+    init(schemaVersion: Int, spells: [Spell]) {
+        self.schemaVersion = schemaVersion
         self.spells = spells
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
-        agent = try container.decodeIfPresent(String.self, forKey: .agent)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+            ?? container.decodeIfPresent(Int.self, forKey: .version)
+            ?? 1
         spells = try container.decodeIfPresent([Spell].self, forKey: .instructions)
             ?? container.decodeIfPresent([Spell].self, forKey: .spells)
             ?? []
@@ -263,16 +264,131 @@ struct SpellRegistry: Codable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(version, forKey: .version)
-        try container.encodeIfPresent(agent, forKey: .agent)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encode(spells, forKey: .instructions)
     }
 
     private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
         case version
-        case agent
         case instructions
         case spells
+    }
+}
+
+struct TargetInstructionRef: Codable, Equatable, Hashable, Identifiable {
+    var uid: String
+    var version: Int
+
+    var id: String {
+        "\(uid)@\(version)"
+    }
+
+    init(uid: String, version: Int) {
+        self.uid = uid
+        self.version = max(version, 1)
+    }
+}
+
+struct TargetInstructionRegistry: Codable, Equatable {
+    var schemaVersion: Int
+    var agent: String
+    var instructions: [TargetInstructionRef]
+
+    static func empty(agent: String) -> TargetInstructionRegistry {
+        TargetInstructionRegistry(schemaVersion: 1, agent: agent, instructions: [])
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case agent
+        case instructions
+    }
+}
+
+struct SpellbookHarness: Identifiable, Codable, Equatable, Hashable {
+    var agent: String
+    var file: String
+    var registry: String
+
+    var id: String {
+        agent
+    }
+}
+
+struct KnownTargetsRegistry: Codable, Equatable {
+    var schemaVersion: Int
+    var targets: [KnownTarget]
+
+    static let empty = KnownTargetsRegistry(schemaVersion: 1, targets: [])
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case targets
+    }
+}
+
+struct KnownTarget: Codable, Equatable, Identifiable {
+    var id: String
+    var targetRoot: String
+    var agentContext: String
+    var harnesses: [SpellbookHarness]
+    var addedAt: String
+    var lastScannedAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case targetRoot = "target_root"
+        case agentContext = "agent_context"
+        case harnesses
+        case addedAt = "added_at"
+        case lastScannedAt = "last_scanned_at"
+    }
+}
+
+struct SpellbookErrorsRegistry: Codable, Equatable {
+    var schemaVersion: Int
+    var errors: [SpellbookDiagnostic]
+
+    static let empty = SpellbookErrorsRegistry(schemaVersion: 1, errors: [])
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case errors
+    }
+}
+
+struct SpellbookDiagnostic: Codable, Equatable, Identifiable {
+    var type: String
+    var severity: String
+    var targetRoot: String?
+    var agent: String?
+    var uid: String?
+    var version: Int?
+    var message: String
+    var detectedAt: String
+
+    var id: String {
+        [
+            type,
+            severity,
+            targetRoot ?? "",
+            agent ?? "",
+            uid ?? "",
+            version.map(String.init) ?? "",
+            message
+        ].joined(separator: "|")
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case severity
+        case targetRoot = "target_root"
+        case agent
+        case uid
+        case version
+        case message
+        case detectedAt = "detected_at"
     }
 }
 

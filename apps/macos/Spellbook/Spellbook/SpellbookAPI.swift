@@ -53,6 +53,17 @@ final class SpellbookAPI {
         return response.spell
     }
 
+    func publicSpell(uid: String, version: Int, token: String? = nil) async throws -> Spell {
+        let response: SpellEnvelope = try await send(
+            path: "/api/spells/\(uid)/versions/\(max(version, 1))",
+            method: "GET",
+            body: Optional<String>.none,
+            token: token,
+            operation: .loadPublishedSpells
+        )
+        return response.spell
+    }
+
     func mySpells(token: String) async throws -> [Spell] {
         let response: SpellsResponse = try await send(
             path: "/api/spells/mine",
@@ -289,8 +300,17 @@ private struct PublishSpellBody: Encodable {
         description = spell.description
         trigger = spell.trigger
         tags = spell.tags
-        file = spell.file
+        file = PublishSpellBody.normalizedFilePath(for: spell)
         content = spell.content ?? ""
+    }
+
+    private static func normalizedFilePath(for spell: Spell) -> String {
+        let file = spell.file.trimmingCharacters(in: .whitespacesAndNewlines)
+        if file.hasPrefix("instructions/"), !file.contains(".."), file.hasSuffix(".md") {
+            return file
+        }
+
+        return "instructions/\(Spell.slug(for: spell.name)).md"
     }
 }
 
