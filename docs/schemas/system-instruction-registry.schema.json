@@ -20,33 +20,18 @@
     "instruction": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["uid", "version", "name", "description", "trigger"],
+      "required": ["uid", "versions"],
       "properties": {
         "uid": {
           "type": "string",
           "minLength": 1
         },
-        "version": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "name": {
-          "type": "string",
-          "minLength": 1
-        },
-        "description": {
-          "type": "string",
-          "minLength": 1
-        },
-        "trigger": {
-          "type": "string",
-          "minLength": 1
-        },
-        "tags": {
+        "versions": {
           "type": "array",
+          "minItems": 1,
           "items": {
-            "type": "string",
-            "minLength": 1
+            "type": "integer",
+            "minimum": 1
           },
           "uniqueItems": true
         }

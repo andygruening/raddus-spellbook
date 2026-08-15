@@ -49,12 +49,13 @@ System-level files:
   instructions/
     <uid>/
       <version>/
+        index.json
         SPEC.md
 ```
 
-The target-level registries reference only instructions installed into that target for that agent. Each reference pins `uid` and `version`, and intentionally does not duplicate instruction names, descriptions, triggers, tags, or bodies. The target registry is the opt-in boundary; the system registry is the metadata authority.
+The target-level registries reference only instructions installed into that target for that agent. Each reference pins `uid` and `version`, and intentionally does not duplicate instruction names, descriptions, triggers, tags, or bodies. The target registry is the opt-in boundary; the system store is the metadata and body authority.
 
-The system-level `registry/registry.json` contains the user's locally installed instruction library. Metadata is versioned and flat, so the resolver always joins target references and system metadata by `(uid, version)`. Creating an instruction in the macOS app publishes or syncs it to the backend first, receives a backend `uid`, writes the local system metadata and `SPEC.md` snapshot, and only then can install `{ uid, version }` into one or more targets. Offline drafts may exist inside the macOS app's private data model, but they are not visible to agent harnesses and cannot be installed into target registries until published.
+The system-level `registry/registry.json` contains only the user's locally installed instruction ids and version lists. Each version's metadata lives beside its body in `~/.spellbook/instructions/<uid>/<version>/index.json`, while the full markdown body lives in `SPEC.md`. This keeps the registry compact while still versioning names, descriptions, triggers, tags, and bodies together. The resolver joins target references to `registry.json` by `uid`, checks that the requested version is installed, then reads that version's `index.json` and `SPEC.md`. Creating an instruction in the macOS app publishes or syncs it to the backend first, receives a backend `uid`, writes the local version metadata and `SPEC.md` snapshot, and only then can install `{ uid, version }` into one or more targets. Offline drafts may exist inside the macOS app's private data model, but they are not visible to agent harnesses and cannot be installed into target registries until published.
 
 The target-level registry uses this thin reference schema:
 
@@ -116,7 +117,7 @@ An example target-level registry file is:
 }
 ```
 
-The system-level registry uses the full versioned metadata schema:
+The system-level registry uses a compact installed-version schema:
 
 ```json
 {
@@ -141,33 +142,18 @@ The system-level registry uses the full versioned metadata schema:
     "instruction": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["uid", "version", "name", "description", "trigger"],
+      "required": ["uid", "versions"],
       "properties": {
         "uid": {
           "type": "string",
           "minLength": 1
         },
-        "version": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "name": {
-          "type": "string",
-          "minLength": 1
-        },
-        "description": {
-          "type": "string",
-          "minLength": 1
-        },
-        "trigger": {
-          "type": "string",
-          "minLength": 1
-        },
-        "tags": {
+        "versions": {
           "type": "array",
+          "minItems": 1,
           "items": {
-            "type": "string",
-            "minLength": 1
+            "type": "integer",
+            "minimum": 1
           },
           "uniqueItems": true
         }
@@ -185,7 +171,73 @@ An example system-level registry file is:
   "instructions": [
     {
       "uid": "remote-stable-id",
-      "version": 1,
+      "versions": [1, 2]
+    }
+  ]
+}
+```
+
+Each installed version has an adjacent metadata file at `~/.spellbook/instructions/<uid>/<version>/index.json`:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spellbook.raddus.dev/schemas/instruction-version-index.schema.json",
+  "title": "Spellbook Instruction Version Index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["uid", "version", "name", "description", "trigger"],
+  "properties": {
+    "uid": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trigger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}
+```
+
+An example instruction version index file is:
+
+```json
+{
+  "uid": "remote-stable-id",
+  "version": 2,
+  "name": "Instruction name",
+  "description": "What this updated version helps the agent do.",
+  "trigger": "Use when this updated instruction should activate.",
+  "tags": ["instruction"]
+}
+```
+
+The adjacent `SPEC.md` contains the full instruction body for that exact `uid` and `version`.
       "name": "Instruction name",
       "description": "What this instruction helps the agent do.",
       "trigger": "Use when this instruction should activate.",
@@ -354,7 +406,7 @@ An example `errors.json` file is:
 }
 ```
 
-The startup scan should validate that each target path exists, each harness file exists, `.agent-context/manifest.json` exists and is valid, the manifest includes each selected agent registry, each agent registry exists and is valid, every `{ uid, version }` target reference exists in the system registry, every referenced `~/.spellbook/instructions/<uid>/<version>/SPEC.md` file exists, the resolver executable exists, and the managed Spellbook block is present in each harness file. If a target path no longer exists, the app records a stale-target diagnostic rather than deleting the target automatically.
+The startup scan should validate that each target path exists, each harness file exists, `.agent-context/manifest.json` exists and is valid, the manifest includes each selected agent registry, each agent registry exists and is valid, every `{ uid, version }` target reference exists in the system registry, every referenced `~/.spellbook/instructions/<uid>/<version>/index.json` metadata file exists, every referenced `~/.spellbook/instructions/<uid>/<version>/SPEC.md` body file exists, the resolver executable exists, and the managed Spellbook block is present in each harness file. If a target path no longer exists, the app records a stale-target diagnostic rather than deleting the target automatically.
 
 The macOS app flow for adding a target is:
 
@@ -371,7 +423,7 @@ The macOS app must install `~/.spellbook/bin/spellbook-agent-context` as a symli
 
 Multiple harness files in one target are supported. Each agent gets its own registry by default. The app may offer a convenience action to copy installed instruction references from another agent's registry, but registries remain independent afterward.
 
-Instruction versions are immutable snapshots. A target can stay pinned to version `1` while another target moves to version `2`. Publishing an update through the macOS client creates a new backend version and writes the corresponding local metadata and `SPEC.md` snapshot. The client may then offer to install that version into one or many target-level registries.
+Instruction versions are immutable snapshots. A target can stay pinned to version `1` while another target moves to version `2`. Publishing an update through the macOS client creates a new backend version and writes the corresponding local `index.json` metadata and `SPEC.md` snapshot. The client may then offer to install that version into one or many target-level registries.
 
 ## Considered Options
 

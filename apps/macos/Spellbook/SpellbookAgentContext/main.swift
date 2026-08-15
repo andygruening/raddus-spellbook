@@ -221,12 +221,18 @@ private enum Resolver {
         }
 
         var registryCache: [String: [String: [String: Any]]] = [:]
+        let requestedKeys = Set(refs.map { key(uid: $0.uid, version: $0.version) })
 
         for ref in refs {
-            let registry = registryCache[ref.context.installedRegistryPath] ?? {
-                let registry = systemRegistry(path: ref.context.installedRegistryPath)
+            let registryCacheKey = "\(ref.context.installedRegistryPath)|\(ref.context.instructionStorePath)"
+            let registry = registryCache[registryCacheKey] ?? {
+                let registry = systemRegistry(
+                    path: ref.context.installedRegistryPath,
+                    instructionStorePath: ref.context.instructionStorePath,
+                    requestedKeys: requestedKeys
+                )
                 diagnostics.append(contentsOf: registry.diagnostics)
-                registryCache[ref.context.installedRegistryPath] = registry.instructions
+                registryCache[registryCacheKey] = registry.instructions
                 return registry.instructions
             }()
 
@@ -304,7 +310,11 @@ private enum Resolver {
             return emit(SpecEnvelope(instruction: nil, diagnostics: diagnostics), code: .operational)
         }
 
-        let registry = systemRegistry(path: context.installedRegistryPath)
+        let registry = systemRegistry(
+            path: context.installedRegistryPath,
+            instructionStorePath: context.instructionStorePath,
+            requestedKeys: Set([key(uid: uid, version: version)])
+        )
         diagnostics.append(contentsOf: registry.diagnostics)
         let metadata = registry.instructions[key(uid: uid, version: version)]
         let path = specURL(uid: uid, version: version, instructionStorePath: context.instructionStorePath)
@@ -518,24 +528,68 @@ private enum Resolver {
         }
     }
 
-    private static func systemRegistry(path: String?) -> (instructions: [String: [String: Any]], diagnostics: [Diagnostic]) {
+    private static func systemRegistry(
+        path: String?,
+        instructionStorePath: String?,
+        requestedKeys: Set<String>? = nil
+    ) -> (instructions: [String: [String: Any]], diagnostics: [Diagnostic]) {
         let registryURL = normalizedURL(for: path ?? "~/.spellbook/registry/registry.json")
         do {
             let payload = try loadObject(at: registryURL)
             let items = array(from: payload["instructions"])
             var index: [String: [String: Any]] = [:]
+            var diagnostics: [Diagnostic] = []
 
             for item in items {
-                guard let metadata = item as? [String: Any],
-                      let uid = metadata["uid"] as? String,
-                      let version = intValue(metadata["version"])
+                guard let entry = item as? [String: Any],
+                      let uid = entry["uid"] as? String
                 else {
                     continue
                 }
-                index[key(uid: uid, version: version)] = metadata
+
+                if let versions = entry["versions"] as? [Any] {
+                    for versionValue in versions {
+                        guard let version = intValue(versionValue) else {
+                            continue
+                        }
+
+                        let instructionKey = key(uid: uid, version: version)
+                        if let requestedKeys, !requestedKeys.contains(instructionKey) {
+                            continue
+                        }
+
+                        let metadataURL = metadataURL(uid: uid, version: version, instructionStorePath: instructionStorePath)
+                        do {
+                            var metadata = try loadObject(at: metadataURL)
+                            metadata["uid"] = uid
+                            metadata["version"] = max(version, 1)
+                            index[instructionKey] = metadata
+                        } catch {
+                            diagnostics.append(Diagnostic(
+                                type: "missing_instruction_metadata",
+                                severity: "warning",
+                                message: "\(uid)@\(version) is listed in the system registry, but its index.json metadata is missing or malformed.",
+                                uid: uid,
+                                version: max(version, 1)
+                            ))
+                        }
+                    }
+                    continue
+                }
+
+                guard let version = intValue(entry["version"]) else {
+                    continue
+                }
+
+                let instructionKey = key(uid: uid, version: version)
+                if let requestedKeys, !requestedKeys.contains(instructionKey) {
+                    continue
+                }
+
+                index[instructionKey] = entry
             }
 
-            return (index, [])
+            return (index, diagnostics)
         } catch {
             return (
                 [:],
@@ -549,6 +603,13 @@ private enum Resolver {
             .appendingPathComponent(uid, isDirectory: true)
             .appendingPathComponent("\(max(version, 1))", isDirectory: true)
             .appendingPathComponent("SPEC.md")
+    }
+
+    private static func metadataURL(uid: String, version: Int, instructionStorePath: String?) -> URL {
+        normalizedURL(for: instructionStorePath ?? "~/.spellbook/instructions/")
+            .appendingPathComponent(uid, isDirectory: true)
+            .appendingPathComponent("\(max(version, 1))", isDirectory: true)
+            .appendingPathComponent("index.json")
     }
 
     private static func loadObject(at url: URL) throws -> [String: Any] {

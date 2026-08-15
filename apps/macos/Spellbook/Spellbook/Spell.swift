@@ -244,12 +244,14 @@ struct Spell: Identifiable, Codable, Equatable {
 struct SpellRegistry: Codable {
     var schemaVersion: Int
     var spells: [Spell]
+    var usesCompactEntries: Bool
 
-    static let empty = SpellRegistry(schemaVersion: 1, spells: [])
+    static let empty = SpellRegistry(schemaVersion: 1, spells: [], usesCompactEntries: true)
 
-    init(schemaVersion: Int, spells: [Spell]) {
+    init(schemaVersion: Int, spells: [Spell], usesCompactEntries: Bool = false) {
         self.schemaVersion = schemaVersion
         self.spells = spells
+        self.usesCompactEntries = usesCompactEntries
     }
 
     init(from decoder: Decoder) throws {
@@ -257,15 +259,55 @@ struct SpellRegistry: Codable {
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
             ?? container.decodeIfPresent(Int.self, forKey: .version)
             ?? 1
-        spells = try container.decodeIfPresent([Spell].self, forKey: .instructions)
-            ?? container.decodeIfPresent([Spell].self, forKey: .spells)
-            ?? []
+
+        if let compactEntries = try? container.decode([SpellRegistryEntry].self, forKey: .instructions) {
+            usesCompactEntries = true
+            spells = compactEntries.flatMap { entry in
+                entry.versions.map { version in
+                    Spell(
+                        uid: entry.uid,
+                        name: "",
+                        description: "",
+                        trigger: "",
+                        tags: [],
+                        version: version
+                    )
+                }
+            }
+        } else {
+            usesCompactEntries = false
+            spells = try container.decodeIfPresent([Spell].self, forKey: .instructions)
+                ?? container.decodeIfPresent([Spell].self, forKey: .spells)
+                ?? []
+        }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schemaVersion, forKey: .schemaVersion)
-        try container.encode(spells, forKey: .instructions)
+        try container.encode(compactEntries, forKey: .instructions)
+    }
+
+    private var compactEntries: [SpellRegistryEntry] {
+        var entries: [SpellRegistryEntry] = []
+        var indexesByUID: [String: Int] = [:]
+
+        for spell in spells {
+            guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
+                continue
+            }
+
+            if let index = indexesByUID[uid] {
+                entries[index].versions.insert(spell.normalizedVersion)
+            } else {
+                indexesByUID[uid] = entries.count
+                entries.append(SpellRegistryEntry(uid: uid, versions: Set([spell.normalizedVersion])))
+            }
+        }
+
+        return entries.map { entry in
+            SpellRegistryEntry(uid: entry.uid, versions: entry.versions)
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -273,6 +315,34 @@ struct SpellRegistry: Codable {
         case version
         case instructions
         case spells
+    }
+}
+
+private struct SpellRegistryEntry: Codable {
+    var uid: String
+    var versions: Set<Int>
+
+    init(uid: String, versions: Set<Int>) {
+        self.uid = uid
+        self.versions = versions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        uid = try container.decode(String.self, forKey: .uid)
+        let decodedVersions = try container.decode([Int].self, forKey: .versions)
+        versions = Set(decodedVersions.map { max($0, 1) })
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(uid, forKey: .uid)
+        try container.encode(versions.sorted(), forKey: .versions)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case uid
+        case versions
     }
 }
 

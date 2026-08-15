@@ -33,12 +33,12 @@ struct LocalSpellsView: View {
                 .help("Refresh")
             }
         } content: {
-            if localStore.spells.isEmpty {
+            if localStore.latestSpells.isEmpty {
                 EmptyState(title: "No installed spells", message: "Create a spell or install one from Published spells.")
             } else {
                 ScrollView {
                     LazyVStack(spacing: 10) {
-                        ForEach(localStore.spells) { spell in
+                        ForEach(localStore.latestSpells) { spell in
                             let displaySpell = displaySpell(for: spell)
                             SpellCard(
                                 spell: displaySpell,
@@ -1178,6 +1178,7 @@ struct PublishedSpellsView: View {
         do {
             let updatedSpell = try await SpellbookAPI.shared.publish(spell: spell, token: token)
             replacePublishedSpell(updatedSpell, matching: originalSpell)
+            try localStore.upsertLocal(updatedSpell)
 
             errorMessage = nil
             viewingSpell = nil
@@ -1234,6 +1235,7 @@ private struct ProjectInstructionRemoval {
 
 struct ProjectsView: View {
     @EnvironmentObject private var localStore: LocalSpellStore
+    @EnvironmentObject private var sessionModel: SessionModel
     @AppStorage("spellbook.expandedProjectIDs") private var expandedProjectIDsData = "[]"
     @State private var expandedTargetIDs: Set<String> = []
     @State private var isShowingAddTargetForm = false
@@ -1244,6 +1246,8 @@ struct ProjectsView: View {
     @State private var pendingProjectInstructionRemoval: ProjectInstructionRemoval?
     @State private var errorMessage: String?
     @State private var statusMessage: String?
+    @State private var latestRemoteSpellsByUID: [String: Spell] = [:]
+    @State private var updatingInstructionIDs: Set<String> = []
 
     var body: some View {
         PageContainer(
@@ -1443,16 +1447,31 @@ struct ProjectsView: View {
     }
 
     private func projectInstructionRow(_ spell: Spell, target: SpellbookTarget) -> some View {
-        HStack(alignment: .center, spacing: 12) {
+        let latestSpell = latestAvailableSpell(for: spell)
+        let updateID = projectInstructionUpdateID(spell, target: target)
+
+        return HStack(alignment: .center, spacing: 12) {
             Button {
                 viewingProjectSpell = spell
             } label: {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(spell.name)
-                            .font(.callout.weight(.medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+                        HStack(spacing: 8) {
+                            Text(spell.name)
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+
+                            if let latestSpell {
+                                SpellPill(
+                                    text: "Update v\(spell.normalizedVersion) -> v\(latestSpell.normalizedVersion)",
+                                    tint: .blue
+                                )
+                            } else {
+                                SpellPill(text: "v\(spell.normalizedVersion)", tint: .gray)
+                            }
+                        }
+
                         Text(spell.description)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1465,6 +1484,18 @@ struct ProjectsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
+
+            if let latestSpell {
+                Button {
+                    update(spell, to: latestSpell, in: target)
+                } label: {
+                    Image(systemName: updatingInstructionIDs.contains(updateID) ? "hourglass" : "arrow.down.circle")
+                        .frame(width: 24, height: 24)
+                }
+                .disabled(updatingInstructionIDs.contains(updateID))
+                .buttonStyle(.borderless)
+                .help("Update to version \(latestSpell.normalizedVersion)")
+            }
 
             Button(role: .destructive) {
                 pendingProjectInstructionRemoval = ProjectInstructionRemoval(spell: spell, target: target)
@@ -1479,6 +1510,28 @@ struct ProjectsView: View {
         .padding(.vertical, 10)
     }
 
+    private func latestAvailableSpell(for spell: Spell) -> Spell? {
+        let candidates = [
+            localStore.latestInstalledSpell(for: spell),
+            latestRemoteSpell(for: spell)
+        ].compactMap { $0 }
+
+        return candidates.max { left, right in
+            left.normalizedVersion < right.normalizedVersion
+        }
+    }
+
+    private func latestRemoteSpell(for spell: Spell) -> Spell? {
+        guard let uid = spell.uid,
+              let remoteSpell = latestRemoteSpellsByUID[uid],
+              remoteSpell.normalizedVersion > spell.normalizedVersion
+        else {
+            return nil
+        }
+
+        return remoteSpell
+    }
+
     private var projectInstructionRemovalMessage: String {
         guard let pendingProjectInstructionRemoval else {
             return ""
@@ -1490,6 +1543,106 @@ struct ProjectsView: View {
     private func refresh() {
         do {
             try localStore.refresh()
+            errorMessage = nil
+            loadLatestRemoteVersions()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadLatestRemoteVersions() {
+        Task {
+            do {
+                let remoteSpells = try await SpellbookAPI.shared.publicSpells(token: sessionModel.session?.token)
+                let latestByUID = remoteSpells.reduce(into: [String: Spell]()) { result, spell in
+                    guard let uid = spell.uid else {
+                        return
+                    }
+
+                    if let existing = result[uid], existing.normalizedVersion >= spell.normalizedVersion {
+                        return
+                    }
+
+                    result[uid] = spell
+                }
+
+                await MainActor.run {
+                    latestRemoteSpellsByUID = latestByUID
+                }
+            } catch SpellbookError.expiredSession {
+                await MainActor.run {
+                    sessionModel.clearExpiredSession()
+                }
+            } catch {
+                // Project-installed instructions remain usable if the remote catalog cannot refresh.
+            }
+        }
+    }
+
+    private func update(_ spell: Spell, to latestSpell: Spell, in target: SpellbookTarget) {
+        let updateID = projectInstructionUpdateID(spell, target: target)
+        guard !updatingInstructionIDs.contains(updateID) else {
+            return
+        }
+
+        updatingInstructionIDs.insert(updateID)
+
+        Task {
+            do {
+                let installableSpell = try await installableVersion(for: latestSpell)
+                await MainActor.run {
+                    do {
+                        try localStore.upsertLocal(installableSpell)
+                        try localStore.addToTarget(installableSpell, target: target)
+                        if let uid = installableSpell.uid {
+                            latestRemoteSpellsByUID[uid] = installableSpell
+                        }
+                        statusMessage = localStore.statusMessage
+                        errorMessage = nil
+                        updatingInstructionIDs.remove(updateID)
+                    } catch {
+                        errorMessage = error.localizedDescription
+                        updatingInstructionIDs.remove(updateID)
+                    }
+                }
+            } catch SpellbookError.expiredSession {
+                await MainActor.run {
+                    sessionModel.clearExpiredSession()
+                    updatingInstructionIDs.remove(updateID)
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    updatingInstructionIDs.remove(updateID)
+                }
+            }
+        }
+    }
+
+    private func installableVersion(for spell: Spell) async throws -> Spell {
+        if spell.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return spell
+        }
+
+        guard let uid = spell.uid else {
+            throw SpellbookError.message("That instruction is missing a uid.")
+        }
+
+        return try await SpellbookAPI.shared.publicSpell(
+            uid: uid,
+            version: spell.normalizedVersion,
+            token: sessionModel.session?.token
+        )
+    }
+
+    private func projectInstructionUpdateID(_ spell: Spell, target: SpellbookTarget) -> String {
+        "\(target.id):\(spell.uid ?? spell.id)"
+    }
+
+    private func update(_ spell: Spell, in target: SpellbookTarget) {
+        do {
+            try localStore.updateTargetInstruction(spell, target: target)
+            statusMessage = localStore.statusMessage
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -1579,7 +1732,7 @@ struct ProjectInstructionPickerView: View {
 
     private var filteredSpells: [Spell] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return localStore.spells.filter { spell in
+        return localStore.latestSpells.filter { spell in
             guard !query.isEmpty else {
                 return true
             }
@@ -1736,30 +1889,45 @@ struct SettingsView: View {
             Text("System Store")
                 .font(.headline)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Label(SpellbookUserStoreLayout.rootURL.path(percentEncoded: false), systemImage: "folder")
-                    .lineLimit(1)
-                    .textSelection(.enabled)
-
-                if let sandboxURL = SpellbookUserStoreLayout.sandboxContainerRootURL {
-                    Label(sandboxURL.path(percentEncoded: false), systemImage: "shippingbox")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(SpellbookUserStoreLayout.rootURL.path(percentEncoded: false), systemImage: "folder")
                         .lineLimit(1)
                         .textSelection(.enabled)
-                }
 
-                if let lastError = localStore.lastError {
-                    Text(lastError)
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
+                    if let sandboxURL = SpellbookUserStoreLayout.sandboxContainerRootURL {
+                        Label(sandboxURL.path(percentEncoded: false), systemImage: "shippingbox")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .textSelection(.enabled)
+                    }
+
+                    if let lastError = localStore.lastError {
+                        Text(lastError)
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    openSystemStore()
+                } label: {
+                    Label("Open in Finder", systemImage: "arrow.up.right.square")
+                        .labelStyle(.iconOnly)
+                        .frame(width: 28, height: 28)
+                }
+                .help("Open \(SpellbookUserStoreLayout.rootURL.path(percentEncoded: false)) in Finder")
+                .accessibilityLabel("Open in Finder")
             }
             .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(nsColor: .controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.18), lineWidth: 1))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var accountSection: some View {
@@ -1841,6 +2009,10 @@ struct SettingsView: View {
         } catch {
             localStore.lastError = error.localizedDescription
         }
+    }
+
+    private func openSystemStore() {
+        NSWorkspace.shared.open(SpellbookUserStoreLayout.rootURL)
     }
 }
 

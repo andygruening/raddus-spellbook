@@ -59,6 +59,7 @@ enum SpellbookUserStoreLayout {
     static let targetsFileName = "targets.json"
     static let errorsFileName = "errors.json"
     static let specFileName = "SPEC.md"
+    static let instructionIndexFileName = "index.json"
     static let resolverFileName = "spellbook-agent-context"
 
     static var rootURL: URL {
@@ -129,6 +130,10 @@ enum SpellbookUserStoreLayout {
 
     static func specURL(uid: String, version: Int) -> URL {
         instructionDirectoryURL(uid: uid, version: version).appending(path: specFileName)
+    }
+
+    static func instructionIndexURL(uid: String, version: Int) -> URL {
+        instructionDirectoryURL(uid: uid, version: version).appending(path: instructionIndexFileName)
     }
 
     static func legacySpecURL(storageID: String, version: Int) -> URL {
