@@ -287,44 +287,22 @@ dd {
   line-height: 1.4;
 }
 
-.spell-tags,
-.detail-tags {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.badge,
 .star-label {
   max-width: 100%;
   min-width: 0;
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-badge);
+  border-radius: var(--radius-button);
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding: var(--badge-padding-block) var(--badge-padding-inline);
+  padding: var(--space-2) var(--space-3);
   font-family: var(--font-documentation);
   font-size: var(--text-micro);
   font-weight: var(--font-weight-bold);
   line-height: 1;
   white-space: nowrap;
-}
-
-.badge-neutral,
-.star-label {
-  border-color: var(--tag-border);
-  background: var(--tag-bg);
-  color: var(--badge-neutral-text);
-}
-
-.badge-info {
-  background: var(--badge-info-bg);
-  color: var(--badge-info-text);
-}
-
-.star-label {
+  background: var(--glass-bg);
+  color: var(--text-primary);
   min-height: 44px;
   justify-self: end;
   justify-content: center;

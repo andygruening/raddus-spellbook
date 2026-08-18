@@ -290,7 +290,6 @@ private struct PublishSpellBody: Encodable {
     var name: String
     var description: String
     var trigger: String
-    var tags: [String]
     var file: String
     var content: String
 
@@ -299,7 +298,6 @@ private struct PublishSpellBody: Encodable {
         name = spell.name
         description = spell.description
         trigger = spell.trigger
-        tags = spell.tags
         file = PublishSpellBody.normalizedFilePath(for: spell)
         content = spell.content ?? ""
     }

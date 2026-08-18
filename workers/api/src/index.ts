@@ -232,7 +232,7 @@ async function listPublicSpells(env: SpellbookEnv, url: URL, viewerEmail: string
   const db = requireDatabase(env);
   const limit = parseLimit(url.searchParams.get("limit"));
   const result = await db.prepare(
-    `SELECT id, name, description, trigger, file, content, version, tags_json, owner_email,
+    `SELECT id, name, description, trigger, file, content, version, owner_email,
             published, created_at, updated_at, published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE
@@ -257,7 +257,7 @@ async function listPublicSpells(env: SpellbookEnv, url: URL, viewerEmail: string
 async function listMine(env: SpellbookEnv, ownerEmail: string): Promise<Response> {
   const db = requireDatabase(env);
   const result = await db.prepare(
-    `SELECT id, name, description, trigger, file, content, version, tags_json, owner_email,
+    `SELECT id, name, description, trigger, file, content, version, owner_email,
             published, created_at, updated_at, published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE
@@ -309,6 +309,7 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
   const db = requireDatabase(env);
   const input = parseSpellInput(await readJsonObject(request));
   const now = new Date().toISOString();
+  const tagsJson = "[]";
 
   if (input.uid) {
     const existing = await findSpellByUID(env, input.uid);
@@ -334,7 +335,7 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
           input.trigger,
           input.file,
           input.content,
-          JSON.stringify(input.tags),
+          tagsJson,
           nextVersion,
           now,
           now,
@@ -354,7 +355,7 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
           input.trigger,
           input.file,
           input.content,
-          JSON.stringify(input.tags),
+          tagsJson,
           now
         )
     ]);
@@ -383,7 +384,7 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
         input.trigger,
         input.file,
         input.content,
-        JSON.stringify(input.tags),
+        tagsJson,
         ownerEmail,
         now,
         now,
@@ -402,7 +403,7 @@ async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: stri
         input.trigger,
         input.file,
         input.content,
-        JSON.stringify(input.tags),
+        tagsJson,
         now
       )
   ]);
@@ -465,7 +466,7 @@ async function setSpellStar(env: SpellbookEnv, uid: string, ownerEmail: string, 
 async function findSpellByUID(env: SpellbookEnv, uid: string, viewerEmail: string | null = null): Promise<SpellRow | null> {
   const db = requireDatabase(env);
   return db.prepare(
-    `SELECT id, name, description, trigger, file, content, version, tags_json, owner_email,
+    `SELECT id, name, description, trigger, file, content, version, owner_email,
             published, created_at, updated_at, published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE
@@ -493,7 +494,7 @@ async function findSpellVersionByUID(
   const db = requireDatabase(env);
   return db.prepare(
     `SELECT spells.id, spell_versions.name, spell_versions.description, spell_versions.trigger,
-            spell_versions.file, spell_versions.content, spell_versions.version, spell_versions.tags_json,
+            spell_versions.file, spell_versions.content, spell_versions.version,
             spells.owner_email, spells.published, spells.created_at, spells.updated_at, spells.published_at,
             (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
             CASE

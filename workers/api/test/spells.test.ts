@@ -8,7 +8,6 @@ describe("spell helpers", () => {
         name: "Review Boundaries",
         description: "Keep review feedback scoped to the requested change.",
         trigger: "Use when reviewing code changes for scope drift.",
-        tags: ["Review", " review ", "scope"],
         file: "instructions/review-boundaries.md",
         content: "# Review Boundaries\n\nCheck ownership and scope."
       })
@@ -17,7 +16,6 @@ describe("spell helpers", () => {
       name: "Review Boundaries",
       description: "Keep review feedback scoped to the requested change.",
       trigger: "Use when reviewing code changes for scope drift.",
-      tags: ["review", "scope"],
       file: "instructions/review-boundaries.md",
       content: "# Review Boundaries\n\nCheck ownership and scope."
     });
@@ -29,7 +27,6 @@ describe("spell helpers", () => {
         name: "Legacy Path",
         description: "Reject old local client paths.",
         trigger: "Use when validating instruction file paths.",
-        tags: ["review"],
         file: "spells/legacy-path.md",
         content: "# Legacy Path"
       })
@@ -42,7 +39,6 @@ describe("spell helpers", () => {
         name: "Bad Path",
         description: "Do not allow path traversal.",
         trigger: "Use when validating spell file paths.",
-        tags: ["review"],
         file: "../bad.md",
         content: "# Bad Path"
       })
@@ -54,7 +50,6 @@ describe("spell helpers", () => {
       parseSpellInput({
         name: "Missing Trigger",
         description: "Do not publish incomplete activation metadata.",
-        tags: ["review"],
         file: "instructions/missing-trigger.md",
         content: "# Missing Trigger"
       })
@@ -71,7 +66,6 @@ describe("spell helpers", () => {
         file: "instructions/review-boundaries.md",
         content: "# Review Boundaries",
         version: 4,
-        tags_json: "[\"review\"]",
         owner_email: "ada@example.com",
         published: 1,
         created_at: "2026-08-06T00:00:00.000Z",
@@ -85,7 +79,6 @@ describe("spell helpers", () => {
       name: "Review Boundaries",
       description: "Keep review feedback scoped.",
       trigger: "Use when reviewing code changes for scope drift.",
-      tags: ["review"],
       file: "instructions/review-boundaries.md",
       content: "# Review Boundaries",
       version: 4,

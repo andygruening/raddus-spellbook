@@ -6,7 +6,6 @@ struct Spell: Identifiable, Codable, Equatable {
     var name: String
     var description: String
     var trigger: String
-    var tags: [String]
     var file: String
     var content: String?
     var version: Int
@@ -36,7 +35,6 @@ struct Spell: Identifiable, Codable, Equatable {
         name: String,
         description: String,
         trigger: String = "",
-        tags: [String] = ["review"],
         file: String = "",
         content: String? = nil,
         version: Int = 1,
@@ -50,7 +48,6 @@ struct Spell: Identifiable, Codable, Equatable {
         self.name = name
         self.description = description
         self.trigger = trigger
-        self.tags = tags
         self.file = file
         self.content = content
         self.version = max(version, 1)
@@ -79,7 +76,6 @@ struct Spell: Identifiable, Codable, Equatable {
         name = decodedName
         description = decodedDescription
         trigger = decodedTrigger ?? ""
-        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? ["review"]
         let decodedFile = try container.decodeIfPresent(String.self, forKey: .file)
             ?? "\(AgentContextLayout.instructionsDirectoryName)/\(Spell.slug(for: decodedName)).md"
         file = AgentContextLayout.canonicalInstructionFilePath(decodedFile)
@@ -97,7 +93,6 @@ struct Spell: Identifiable, Codable, Equatable {
         try container.encode(name, forKey: .name)
         try container.encode(description, forKey: .description)
         try container.encode(trigger, forKey: .trigger)
-        try container.encode(tags, forKey: .tags)
         if !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             try container.encode(file, forKey: .file)
         }
@@ -220,7 +215,6 @@ struct Spell: Identifiable, Codable, Equatable {
         case localID
         case name
         case description
-        case tags
         case file
         case content
         case version
@@ -269,7 +263,6 @@ struct SpellRegistry: Codable {
                         name: "",
                         description: "",
                         trigger: "",
-                        tags: [],
                         version: version
                     )
                 }

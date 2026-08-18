@@ -5,7 +5,6 @@ export type SpellInput = {
   name: string;
   description: string;
   trigger: string;
-  tags: string[];
   file: string;
   content: string;
 };
@@ -18,7 +17,6 @@ export type SpellRow = {
   file: string;
   content: string;
   version: number;
-  tags_json: string;
   owner_email: string;
   published: number;
   created_at: string;
@@ -33,7 +31,6 @@ export type SpellResponse = {
   name: string;
   description: string;
   trigger: string;
-  tags: string[];
   file: string;
   content: string;
   version: number;
@@ -52,7 +49,6 @@ export function parseSpellInput(body: Record<string, unknown>): SpellInput {
     name,
     description: requiredText(body.description, "Description is required.", 500),
     trigger: requiredText(body.trigger, "Trigger is required.", 1000),
-    tags: parseTags(body.tags),
     file: validatedFile(file),
     content: requiredText(body.content, "Markdown content is required.", 50000)
   };
@@ -64,7 +60,6 @@ export function rowToSpell(row: SpellRow): SpellResponse {
     name: row.name,
     description: row.description,
     trigger: row.trigger,
-    tags: parseTagsJson(row.tags_json),
     file: row.file,
     content: row.content,
     version: row.version,
@@ -109,41 +104,6 @@ function optionalText(value: unknown, maxLength: number): string | null {
   return text;
 }
 
-function parseTags(value: unknown): string[] {
-  if (value === undefined || value === null) {
-    return ["review"];
-  }
-
-  if (!Array.isArray(value)) {
-    throw new AppError("Tags must be a list of text values.", 400);
-  }
-
-  const tags = value
-    .filter((tag): tag is string => typeof tag === "string")
-    .map((tag) => tag.trim().toLowerCase())
-    .filter((tag) => tag.length > 0)
-    .slice(0, 20);
-
-  const deduped = Array.from(new Set(tags.map((tag) => tag.slice(0, 40))));
-  return deduped.length === 0 ? ["review"] : deduped;
-}
-
-function parseTagsJson(value: string): string[] {
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return [];
-  }
-
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-
-  return parsed.filter((tag): tag is string => typeof tag === "string");
-}
-
 function validatedFile(value: string): string {
   if (value.startsWith("/") || value.includes("..")) {
     throw new AppError("Instruction files must live under ./instructions and end in .md.", 400);
@@ -180,7 +140,6 @@ export function isSpellResponse(value: unknown): value is SpellResponse {
     typeof value.name === "string" &&
     typeof value.description === "string" &&
     typeof value.trigger === "string" &&
-    Array.isArray(value.tags) &&
     typeof value.file === "string" &&
     typeof value.content === "string" &&
     typeof value.version === "number"

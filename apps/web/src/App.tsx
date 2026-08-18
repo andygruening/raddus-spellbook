@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   appShellRecipe,
-  badgeRecipe,
   buttonRecipe,
   cardRecipe,
   designTokens,
@@ -16,7 +15,6 @@ type Spell = {
   name: string;
   description: string;
   trigger: string;
-  tags: string[];
   file: string;
   content: string;
   version: number;
@@ -56,8 +54,6 @@ const designStyle: DesignStyle = {
   "--glass-strong-bg": "rgba(255, 255, 255, 0.9)",
   "--logo-bg": "linear-gradient(135deg, #ffffff 0%, #edf5ff 100%)",
   "--logo-border": "rgba(18, 35, 63, 0.14)",
-  "--tag-border": "rgba(20, 119, 255, 0.28)",
-  "--tag-bg": "rgba(255, 255, 255, 0.76)",
   "--score-bg": "#efefef",
   "--danger-bg": designTokens.rawColors.semantic.danger.bg,
   "--danger-border": designTokens.rawColors.semantic.danger.border,
@@ -84,7 +80,6 @@ const designStyle: DesignStyle = {
   "--space-8": px(designTokens.spacing.scale[7]),
   "--space-9": px(designTokens.spacing.scale[8]),
   "--radius-button": px(designTokens.radii.button),
-  "--radius-badge": px(designTokens.radii.badge),
   "--radius-card": px(designTokens.radii.button),
   "--radius-modal": px(designTokens.radii.button),
   "--shadow-card": "0 18px 58px rgba(18, 71, 140, 0.08)",
@@ -106,13 +101,6 @@ const designStyle: DesignStyle = {
   "--button-height": px(buttonRecipe.secondary.minHeight),
   "--button-font-size": px(designTokens.typography.raw.scale.body4.size),
   "--button-padding-x": px(buttonRecipe.secondary.paddingInline),
-  "--badge-neutral-bg": "rgba(255, 255, 255, 0.76)",
-  "--badge-neutral-text": "#1477ff",
-  "--badge-info-bg": "rgba(237, 245, 255, 0.88)",
-  "--badge-info-text": "#0f5fd6",
-  "--badge-padding-block": px(badgeRecipe.neutral.paddingBlock),
-  "--badge-padding-inline": px(badgeRecipe.neutral.paddingInline),
-  "--badge-font-size": px(designTokens.typography.raw.scale.body5.size),
   "--card-border": "1px solid rgba(32, 34, 38, 0.1)",
   "--card-padding": px(cardRecipe.default.padding),
   "--modal-border": "1px solid rgba(18, 35, 63, 0.11)",
@@ -362,17 +350,6 @@ function SpellTile({ isOpen, onOpen, spell }: { isOpen: boolean; onOpen: () => v
       <span className="spell-copy">
         <span className="spell-name">{spell.name}</span>
         <span className="spell-description">{spell.description}</span>
-        <span className="spell-tags">
-          {spell.tags.length > 0 ? (
-            spell.tags.map((tag) => (
-              <Badge key={tag} variant="neutral">
-                {tag}
-              </Badge>
-            ))
-          ) : (
-            <Badge variant="neutral">untagged</Badge>
-          )}
-        </span>
       </span>
       <span className="star-label" aria-label={`${spell.starCount} upvotes`}>
         <span aria-hidden="true">★</span>
@@ -484,18 +461,6 @@ function SpellDetailsWindow({
               <p>{spell.description}</p>
             </div>
 
-            <div className="detail-tags">
-              {spell.tags.length > 0 ? (
-                spell.tags.map((tag) => (
-                  <Badge key={tag} variant="neutral">
-                    {tag}
-                  </Badge>
-                ))
-              ) : (
-                <Badge variant="neutral">untagged</Badge>
-              )}
-            </div>
-
             <section className="detail-section">
               <h3>Trigger</h3>
               <p>{spell.trigger}</p>
@@ -532,16 +497,6 @@ function SpellDetailsWindow({
       </section>
     </div>
   );
-}
-
-function Badge({
-  children,
-  variant
-}: {
-  children: ReactNode;
-  variant: "info" | "neutral";
-}) {
-  return <span className={`badge badge-${variant}`}>{children}</span>;
 }
 
 function StatusPanel({

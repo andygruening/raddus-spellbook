@@ -344,15 +344,6 @@ struct InstructionDetailView: View {
                 .help("Close")
             }
 
-            if !spell.tags.isEmpty {
-                TagFlowLayout(horizontalSpacing: 8, verticalSpacing: 6) {
-                    ForEach(spell.tags, id: \.self) { tag in
-                        SpellPill(text: tag, tint: .blue)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
             VStack(alignment: .leading, spacing: 6) {
                 Text("Trigger")
                     .font(.callout.weight(.medium))
@@ -505,7 +496,6 @@ enum SpellFormMode {
 
 private enum InstructionFlowStep: Int, CaseIterable, Identifiable {
     case basics
-    case tags
     case trigger
     case spec
 
@@ -515,8 +505,6 @@ private enum InstructionFlowStep: Int, CaseIterable, Identifiable {
         switch self {
         case .basics:
             return "Basics"
-        case .tags:
-            return "Tags"
         case .trigger:
             return "Trigger"
         case .spec:
@@ -528,8 +516,6 @@ private enum InstructionFlowStep: Int, CaseIterable, Identifiable {
         switch self {
         case .basics:
             return "text.cursor"
-        case .tags:
-            return "tag"
         case .trigger:
             return "bolt"
         case .spec:
@@ -549,7 +535,6 @@ private struct InstructionFlowView: View {
     @State private var spellDescription = ""
     @State private var trigger = ""
     @State private var content = ""
-    @State private var tags = "review"
     @State private var validationMessage: String?
     @State private var isSaving = false
 
@@ -564,7 +549,6 @@ private struct InstructionFlowView: View {
         _spellDescription = State(initialValue: spell?.description ?? "")
         _trigger = State(initialValue: spell?.trigger ?? "")
         _content = State(initialValue: spell?.content ?? "")
-        _tags = State(initialValue: spell?.tags.joined(separator: ", ") ?? "review")
     }
 
     private var canCreate: Bool {
@@ -578,8 +562,6 @@ private struct InstructionFlowView: View {
         switch currentStep {
         case .basics:
             return !trimmed(name).isEmpty && !trimmed(spellDescription).isEmpty
-        case .tags:
-            return true
         case .trigger:
             return !trimmed(trigger).isEmpty
         case .spec:
@@ -735,11 +717,6 @@ private struct InstructionFlowView: View {
                         .textFieldStyle(.roundedBorder)
                 }
             }
-        case .tags:
-            LabeledContent("Tags") {
-                TextField("review, security", text: $tags)
-                    .textFieldStyle(.roundedBorder)
-            }
         case .trigger:
             VStack(alignment: .leading, spacing: 6) {
                 Text("Trigger")
@@ -825,7 +802,6 @@ private struct InstructionFlowView: View {
             name: trimmed(name),
             description: trimmed(spellDescription),
             trigger: trimmed(trigger),
-            tags: parsedTags(),
             file: existing?.file ?? "",
             content: trimmed(content),
             version: existing?.version ?? 1,
@@ -834,15 +810,6 @@ private struct InstructionFlowView: View {
             starCount: existing?.starCount ?? 0,
             starredByMe: existing?.starredByMe ?? false
         )
-    }
-
-    private func parsedTags() -> [String] {
-        let parsed = tags
-            .split(separator: ",")
-            .map { trimmed(String($0)).lowercased() }
-            .filter { !$0.isEmpty }
-
-        return parsed.isEmpty ? ["review"] : Array(Set(parsed)).sorted()
     }
 
     private func trimmed(_ value: String) -> String {
@@ -991,7 +958,7 @@ struct PublishedSpellsView: View {
                 return true
             }
 
-            let searchable = [spell.name, spell.description, spell.trigger, spell.tags.joined(separator: " "), spell.content ?? ""]
+            let searchable = [spell.name, spell.description, spell.trigger, spell.content ?? ""]
                 .joined(separator: " ")
                 .lowercased()
             return searchable.contains(query)
@@ -1737,7 +1704,7 @@ struct ProjectInstructionPickerView: View {
                 return true
             }
 
-            let searchable = [spell.name, spell.description, spell.trigger, spell.tags.joined(separator: " ")]
+            let searchable = [spell.name, spell.description, spell.trigger]
                 .joined(separator: " ")
                 .lowercased()
             return searchable.contains(query)
@@ -2438,14 +2405,6 @@ struct SpellCard: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
 
-                    if !spell.tags.isEmpty {
-                        TagFlowLayout(horizontalSpacing: 8, verticalSpacing: 6) {
-                            ForEach(spell.tags, id: \.self) { tag in
-                                SpellPill(text: tag, tint: .blue)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
                 }
 
                 Spacer()
@@ -2478,63 +2437,6 @@ struct SpellPill: View {
             .padding(.vertical, 3)
             .clipShape(Capsule())
             .overlay(Capsule().stroke(tint.opacity(0.32), lineWidth: 1))
-    }
-}
-
-struct TagFlowLayout: Layout {
-    var horizontalSpacing: CGFloat = 8
-    var verticalSpacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
-        var rowWidth: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalWidth: CGFloat = 0
-        var totalHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            let additionalWidth = rowWidth == 0 ? size.width : horizontalSpacing + size.width
-
-            if rowWidth > 0, rowWidth + additionalWidth > maxWidth {
-                totalWidth = max(totalWidth, rowWidth)
-                totalHeight += rowHeight + verticalSpacing
-                rowWidth = size.width
-                rowHeight = size.height
-            } else {
-                rowWidth += additionalWidth
-                rowHeight = max(rowHeight, size.height)
-            }
-        }
-
-        totalWidth = max(totalWidth, rowWidth)
-        totalHeight += rowHeight
-
-        return CGSize(width: proposal.width ?? totalWidth, height: totalHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + verticalSpacing
-                rowHeight = 0
-            }
-
-            subview.place(
-                at: CGPoint(x: x, y: y),
-                proposal: ProposedViewSize(width: size.width, height: size.height)
-            )
-
-            x += size.width + horizontalSpacing
-            rowHeight = max(rowHeight, size.height)
-        }
     }
 }
 
