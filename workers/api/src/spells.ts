@@ -42,6 +42,10 @@ export type SpellResponse = {
 
 export function parseSpellInput(body: Record<string, unknown>): SpellInput {
   const name = requiredText(body.name, "Name is required.", 120);
+  if (body.file !== undefined && body.file !== null && typeof body.file !== "string") {
+    throw new AppError("Instruction files must live under ./instructions and end in .md.", 400);
+  }
+
   const file = optionalText(body.file, 240) ?? `instructions/${slugForFile(name)}.md`;
 
   return {
