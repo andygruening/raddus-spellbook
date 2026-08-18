@@ -23,11 +23,13 @@ struct SpellbookTarget: Identifiable, Codable, Equatable {
         name: String,
         directoryPath: String,
         harnesses: [SpellbookHarness],
-        directoryBookmarkData: Data,
+        directoryBookmarkData: Data = Data(),
         addedAt: String = ISO8601DateFormatter.spellbook.string(from: Date())
     ) {
         self.id = id
-        self.name = name
+        self.name = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? SpellbookTarget.displayName(for: directoryPath)
+            : name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.directoryPath = directoryPath
         self.harnesses = harnesses
         self.directoryBookmarkData = directoryBookmarkData
@@ -36,16 +38,21 @@ struct SpellbookTarget: Identifiable, Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        directoryPath = try container.decode(String.self, forKey: .directoryPath)
-        directoryBookmarkData = try container.decode(Data.self, forKey: .directoryBookmarkData)
+        directoryPath = try container.decodeIfPresent(String.self, forKey: .directoryPath)
+            ?? container.decode(String.self, forKey: .root)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? directoryPath
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+            ?? SpellbookTarget.displayName(for: directoryPath)
+        directoryBookmarkData = try container.decodeIfPresent(Data.self, forKey: .directoryBookmarkData) ?? Data()
         addedAt = try container.decodeIfPresent(String.self, forKey: .addedAt)
             ?? ISO8601DateFormatter.spellbook.string(from: Date())
 
         if let decodedHarnesses = try container.decodeIfPresent([SpellbookHarness].self, forKey: .harnesses),
            !decodedHarnesses.isEmpty {
             harnesses = decodedHarnesses
+        } else if let decodedFiles = try container.decodeIfPresent([String].self, forKey: .harnessFiles),
+                  !decodedFiles.isEmpty {
+            harnesses = decodedFiles.map { SpellbookHarness(file: $0) }
         } else {
             let legacyFileName = try container.decodeIfPresent(String.self, forKey: .instructionFileName)
                 ?? InstructionManager.supportedFiles[0]
@@ -64,6 +71,10 @@ struct SpellbookTarget: Identifiable, Codable, Equatable {
     }
 
     func resolveDirectoryURL() throws -> URL {
+        guard !directoryBookmarkData.isEmpty else {
+            return URL(fileURLWithPath: directoryPath, isDirectory: true)
+        }
+
         var stale = false
         return try URL(
             resolvingBookmarkData: directoryBookmarkData,
@@ -77,19 +88,32 @@ struct SpellbookTarget: Identifiable, Codable, Equatable {
         directoryURL.appending(path: instructionFileName)
     }
 
-    func registryURL(in directoryURL: URL, agent: String) -> URL {
-        AgentContextLayout.registryURL(in: directoryURL, agent: agent)
+    static func displayName(for path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        return url.lastPathComponent.isEmpty ? path : url.lastPathComponent
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case name
         case directoryPath
+        case root
         case instructionFileName
         case harnesses
+        case harnessFiles = "harness_files"
         case directoryBookmarkData
         case addedAt
     }
+}
+
+private struct LocalInstructionScan {
+    var spells: [Spell]
+    var diagnostics: [SpellbookDiagnostic]
+}
+
+private struct ProjectInstructionState {
+    var refsByTargetID: [String: [TargetInstructionRef]]
+    var spellsByTargetID: [String: [Spell]]
 }
 
 @MainActor
@@ -97,6 +121,7 @@ final class LocalSpellStore: ObservableObject {
     @Published private(set) var targets: [SpellbookTarget] = []
     @Published private(set) var spells: [Spell] = []
     @Published private(set) var projectSpellsByTargetID: [String: [Spell]] = [:]
+    @Published private(set) var projectInstructionRefsByTargetID: [String: [TargetInstructionRef]] = [:]
     @Published private(set) var diagnostics: [SpellbookDiagnostic] = []
     @Published var statusMessage: String?
     @Published var lastError: String?
@@ -118,7 +143,7 @@ final class LocalSpellStore: ObservableObject {
     }
 
     var spellsURL: URL? {
-        SpellbookUserStoreLayout.systemRegistryURL
+        SpellbookUserStoreLayout.instructionsDirectoryURL
     }
 
     var latestSpells: [Spell] {
@@ -163,9 +188,13 @@ final class LocalSpellStore: ObservableObject {
     }
 
     func target(_ target: SpellbookTarget, contains spell: Spell) -> Bool {
-        projectSpells(for: target).contains { projectSpell in
-            projectSpell.hasSameIdentity(as: spell)
+        guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
+            return projectSpells(for: target).contains { projectSpell in
+                projectSpell.hasSameIdentity(as: spell)
+            }
         }
+
+        return projectInstructionRefsByTargetID[target.id]?.contains { $0.uid == uid } == true
     }
 
     func projectTargets(containing spell: Spell) -> [SpellbookTarget] {
@@ -182,25 +211,29 @@ final class LocalSpellStore: ObservableObject {
         let harnesses = try InstructionManager.harnesses(for: harnessFileNames)
         let bookmarkData = try directoryURL.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
         let directoryPath = directoryURL.path(percentEncoded: false)
-        let fallbackName = directoryURL.lastPathComponent.isEmpty ? directoryPath : directoryURL.lastPathComponent
-        let targetName = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallbackName : name.trimmingCharacters(in: .whitespacesAndNewlines)
-        var incoming = SpellbookTarget(
-            id: "target-\(UUID().uuidString)",
-            name: targetName,
-            directoryPath: directoryPath,
-            harnesses: harnesses,
-            directoryBookmarkData: bookmarkData
-        )
+        let targetName = name.trimmingCharacters(in: .whitespacesAndNewlines)
 
         startAccessing(directoryURL)
-        try InstructionManager.apply(directoryURL: directoryURL, harnessFileNames: harnessFileNames)
+        try InstructionManager.apply(directoryURL: directoryURL, harnessFileNames: harnessFileNames, installedSpells: spells)
 
         if let existingIndex = targets.firstIndex(where: { $0.directoryPath == directoryPath }) {
-            incoming.id = targets[existingIndex].id
-            incoming.addedAt = targets[existingIndex].addedAt
-            targets[existingIndex] = incoming
+            let existing = targets[existingIndex]
+            targets[existingIndex] = SpellbookTarget(
+                id: existing.id,
+                name: targetName.isEmpty ? existing.name : targetName,
+                directoryPath: directoryPath,
+                harnesses: mergedHarnesses(existing.harnesses, harnesses),
+                directoryBookmarkData: bookmarkData,
+                addedAt: existing.addedAt
+            )
         } else {
-            targets.append(incoming)
+            targets.append(SpellbookTarget(
+                id: directoryPath,
+                name: targetName,
+                directoryPath: directoryPath,
+                harnesses: harnesses,
+                directoryBookmarkData: bookmarkData
+            ))
         }
 
         try persistTargets()
@@ -223,8 +256,15 @@ final class LocalSpellStore: ObservableObject {
         }
 
         let bookmarkData = try directoryURL.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
-        let fallbackName = directoryURL.lastPathComponent.isEmpty ? directoryPath : directoryURL.lastPathComponent
-        let targetName = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallbackName : name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let oldDirectoryURL = resolveDirectoryURL(for: target),
+           oldDirectoryURL.standardizedFileURL == directoryURL.standardizedFileURL {
+            let removedHarnesses = target.harnesses.filter { oldHarness in
+                !harnesses.contains(where: { $0.file == oldHarness.file })
+            }
+            try InstructionManager.removeManagedBlocks(from: oldDirectoryURL, harnesses: removedHarnesses)
+        }
 
         targets[index] = SpellbookTarget(
             id: target.id,
@@ -236,7 +276,7 @@ final class LocalSpellStore: ObservableObject {
         )
 
         startAccessing(directoryURL)
-        try InstructionManager.apply(directoryURL: directoryURL, harnessFileNames: harnessFileNames)
+        try InstructionManager.apply(directoryURL: directoryURL, harnessFileNames: harnessFileNames, installedSpells: spells)
         try persistTargets()
         try refresh()
     }
@@ -265,15 +305,18 @@ final class LocalSpellStore: ObservableObject {
     func refresh() throws {
         try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.registryDirectoryURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.instructionsDirectoryURL, withIntermediateDirectories: true)
-        try InstructionManager.installResolver()
         try migrateLegacySystemRegistryIfNeeded()
         try migrateSandboxedSystemStoreIfNeeded()
-        try createEmptyRegistryIfMissing()
-        try normalizeSystemRegistryIfNeeded()
-        let registry = try loadSystemRegistry()
-        spells = hydrate(registry.spells)
-        projectSpellsByTargetID = try loadProjectSpellsByTargetID(systemSpells: spells)
-        diagnostics = try scanKnownTargetsAndWriteErrors(systemSpells: spells)
+        if !FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.targetsURL.path(percentEncoded: false)) {
+            try writeKnownTargets()
+        }
+
+        let localScan = try scanInstructionStore()
+        spells = localScan.spells
+        let projectState = try loadProjectInstructionState(systemSpells: spells)
+        projectInstructionRefsByTargetID = projectState.refsByTargetID
+        projectSpellsByTargetID = projectState.spellsByTargetID
+        diagnostics = localScan.diagnostics + (try scanKnownTargets(systemSpells: spells))
         statusMessage = "Loaded \(spells.count) installed instruction\(spells.count == 1 ? "" : "s")."
     }
 
@@ -287,25 +330,20 @@ final class LocalSpellStore: ObservableObject {
             throw SpellbookError.message("Publish or sync this instruction before installing it locally.")
         }
 
-        var registry = try loadSystemRegistry()
         var incoming = spell
         incoming.uid = uid
         incoming.localID = nil
         incoming.file = ""
         incoming.version = incoming.normalizedVersion
 
-        if let index = registry.spells.firstIndex(where: { $0.uid == uid && $0.normalizedVersion == incoming.normalizedVersion }) {
-            incoming.ownerEmail = incoming.ownerEmail ?? registry.spells[index].ownerEmail
-            incoming.publishedAt = incoming.publishedAt ?? registry.spells[index].publishedAt
-            registry.spells[index] = incoming
-        } else {
-            registry.spells.insert(incoming, at: 0)
+        if let existing = versionedMetadata(for: incoming) {
+            incoming.ownerEmail = incoming.ownerEmail ?? existing.ownerEmail
+            incoming.publishedAt = incoming.publishedAt ?? existing.publishedAt
         }
 
         rememberOwner(for: incoming)
         try writeMetadata(for: incoming)
         try writeMarkdown(for: incoming)
-        try saveSystemRegistry(registry)
         try refresh()
         statusMessage = "Installed \(incoming.name) \(uid)@\(incoming.normalizedVersion)."
     }
@@ -322,38 +360,32 @@ final class LocalSpellStore: ObservableObject {
     }
 
     func removeLocal(_ spell: Spell) throws {
-        guard let uid = spell.uid else {
-            throw SpellbookError.message("Only published instructions can be removed from the installed registry.")
+        guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
+            throw SpellbookError.message("Only published instructions can be removed from the local instruction store.")
         }
 
+        try refresh()
         let connectedTargets = projectTargets(containing: spell)
         guard connectedTargets.isEmpty else {
             let projectNames = connectedTargets.map(\.name).joined(separator: ", ")
-            throw SpellbookError.message("Remove this instruction from \(projectNames) before removing it from the installed registry.")
+            throw SpellbookError.message("Remove this instruction from \(projectNames) before deleting its local files.")
         }
 
-        var registry = try loadSystemRegistry()
-        registry.spells.removeAll { $0.uid == uid && $0.normalizedVersion == spell.normalizedVersion }
-        try saveSystemRegistry(registry)
+        let instructionDirectoryURL = SpellbookUserStoreLayout.instructionsDirectoryURL
+            .appending(path: SpellbookUserStoreLayout.safeStoragePathComponent(uid), directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: instructionDirectoryURL.path(percentEncoded: false)) {
+            try FileManager.default.removeItem(at: instructionDirectoryURL)
+        }
+
         try refresh()
-        statusMessage = "Removed \(spell.name)."
+        statusMessage = "Removed all local versions of \(spell.name)."
     }
 
     func createEmptyRegistryIfMissing() throws {
         try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.registryDirectoryURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.instructionsDirectoryURL, withIntermediateDirectories: true)
-        try InstructionManager.installResolver()
-
-        if !FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.systemRegistryURL.path(percentEncoded: false)) {
-            try saveSystemRegistry(.empty)
-        }
-
         if !FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.targetsURL.path(percentEncoded: false)) {
-            try writeKnownTargets(lastScannedAt: nil)
-        }
-
-        if !FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.errorsURL.path(percentEncoded: false)) {
-            try saveErrors(.empty)
+            try writeKnownTargets()
         }
     }
 
@@ -366,29 +398,21 @@ final class LocalSpellStore: ObservableObject {
             throw SpellbookError.message("Choose the project directory again before adding instructions.")
         }
 
-        try ensureProjectPackage(for: target, directoryURL: directoryURL)
-        let ref = TargetInstructionRef(uid: uid, version: spell.normalizedVersion)
+        try ensureLocalVersionIsComplete(uid: uid, version: spell.normalizedVersion)
+        try ensureHarnessBlocks(for: target, directoryURL: directoryURL)
+
         var replacedExistingVersion = false
-
+        var inserted = false
         for harness in target.harnesses {
-            let registryURL = target.registryURL(in: directoryURL, agent: harness.agent)
-            var registry = try loadTargetRegistryIfExists(at: registryURL, agent: harness.agent)
-            let insertIndex = registry.instructions.firstIndex { $0.uid == uid } ?? 0
-            let existingRefs = registry.instructions.filter { $0.uid == uid }
-            registry.instructions.removeAll { $0.uid == uid }
-
-            if existingRefs != [ref] {
-                replacedExistingVersion = replacedExistingVersion || !existingRefs.isEmpty
-            }
-
-            registry.instructions.insert(ref, at: min(insertIndex, registry.instructions.count))
-            try save(registry, to: registryURL)
+            let mutation = try InstructionManager.upsertInstruction(spell, in: directoryURL.appending(path: harness.file))
+            replacedExistingVersion = replacedExistingVersion || mutation.replacedExistingVersion
+            inserted = inserted || mutation.inserted
         }
 
         try refresh()
         statusMessage = replacedExistingVersion
             ? "Updated \(spell.name) in \(target.name) to version \(spell.normalizedVersion)."
-            : "Added \(spell.name) to \(target.name)."
+            : inserted ? "Added \(spell.name) to \(target.name)." : "\(spell.name) is already installed in \(target.name)."
     }
 
     func updateTargetInstruction(_ spell: Spell, target: SpellbookTarget) throws {
@@ -404,21 +428,18 @@ final class LocalSpellStore: ObservableObject {
             throw SpellbookError.message("Choose the project directory again before updating instructions.")
         }
 
-        try ensureProjectPackage(for: target, directoryURL: directoryURL)
-        let latestRef = TargetInstructionRef(uid: uid, version: latestSpell.normalizedVersion)
+        try ensureLocalVersionIsComplete(uid: uid, version: latestSpell.normalizedVersion)
+        try ensureHarnessBlocks(for: target, directoryURL: directoryURL)
         var updated = false
 
         for harness in target.harnesses {
-            let registryURL = target.registryURL(in: directoryURL, agent: harness.agent)
-            var registry = try loadTargetRegistryIfExists(at: registryURL, agent: harness.agent)
-            guard registry.instructions.contains(where: { $0.uid == uid }) else {
+            let harnessURL = directoryURL.appending(path: harness.file)
+            let refs = try InstructionManager.instructionRefs(in: harnessURL)
+            guard refs.contains(where: { $0.uid == uid }) else {
                 continue
             }
 
-            let insertIndex = registry.instructions.firstIndex { $0.uid == uid } ?? 0
-            registry.instructions.removeAll { $0.uid == uid }
-            registry.instructions.insert(latestRef, at: min(insertIndex, registry.instructions.count))
-            try save(registry, to: registryURL)
+            _ = try InstructionManager.upsertInstruction(latestSpell, in: harnessURL)
             updated = true
         }
 
@@ -431,7 +452,7 @@ final class LocalSpellStore: ObservableObject {
     }
 
     func removeFromTarget(_ spell: Spell, target: SpellbookTarget) throws {
-        guard let uid = spell.uid else {
+        guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
             throw SpellbookError.message("That instruction is not installed in this target.")
         }
 
@@ -441,14 +462,8 @@ final class LocalSpellStore: ObservableObject {
 
         var removed = false
         for harness in target.harnesses {
-            let registryURL = target.registryURL(in: directoryURL, agent: harness.agent)
-            var registry = try loadTargetRegistryIfExists(at: registryURL, agent: harness.agent)
-            let oldCount = registry.instructions.count
-            registry.instructions.removeAll { $0.uid == uid && $0.version == spell.normalizedVersion }
-            if registry.instructions.count != oldCount {
-                try save(registry, to: registryURL)
-                removed = true
-            }
+            let harnessURL = directoryURL.appending(path: harness.file)
+            removed = (try InstructionManager.removeInstruction(uid: uid, from: harnessURL)) || removed
         }
 
         guard removed else {
@@ -460,13 +475,7 @@ final class LocalSpellStore: ObservableObject {
     }
 
     private func loadSystemRegistry() throws -> SpellRegistry {
-        try loadRegistryIfExists(at: SpellbookUserStoreLayout.systemRegistryURL)
-    }
-
-    private func saveSystemRegistry(_ registry: SpellRegistry) throws {
-        let data = try JSONEncoder.spellbook.encode(registry)
-        try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.systemRegistryURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: SpellbookUserStoreLayout.systemRegistryURL, options: [.atomic])
+        try loadRegistryIfExists(at: SpellbookUserStoreLayout.legacySystemRegistryURL)
     }
 
     private func loadRegistryIfExists(at url: URL) throws -> SpellRegistry {
@@ -478,61 +487,55 @@ final class LocalSpellStore: ObservableObject {
         return try JSONDecoder.spellbook.decode(SpellRegistry.self, from: data)
     }
 
-    private func loadTargetRegistryIfExists(at url: URL, agent: String) throws -> TargetInstructionRegistry {
-        guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else {
-            return .empty(agent: agent)
-        }
-
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder.spellbook.decode(TargetInstructionRegistry.self, from: data)
-    }
-
-    private func save(_ registry: TargetInstructionRegistry, to url: URL) throws {
-        let data = try JSONEncoder.spellbook.encode(registry)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: [.atomic])
-    }
-
-    private func loadProjectSpellsByTargetID(systemSpells: [Spell]) throws -> [String: [Spell]] {
+    private func loadProjectInstructionState(systemSpells: [Spell]) throws -> ProjectInstructionState {
         let index = systemSpells.compactMap { spell -> (String, Spell)? in
             guard let uid = spell.uid else {
                 return nil
             }
-            return ("\(uid)@\(spell.normalizedVersion)", spell)
+            return (TargetInstructionRef(uid: uid, version: spell.normalizedVersion).id, spell)
         }
         .reduce(into: [String: Spell]()) { result, pair in
             result[pair.0] = pair.1
         }
-        var projectSpells: [String: [Spell]] = [:]
+
+        var refsByTargetID: [String: [TargetInstructionRef]] = [:]
+        var spellsByTargetID: [String: [Spell]] = [:]
 
         for target in targets {
             guard let directoryURL = resolveDirectoryURL(for: target) else {
-                projectSpells[target.id] = []
+                refsByTargetID[target.id] = []
+                spellsByTargetID[target.id] = []
                 continue
             }
 
             var refs: [TargetInstructionRef] = []
             for harness in target.harnesses {
-                let registryURL = target.registryURL(in: directoryURL, agent: harness.agent)
-                let registry = try loadTargetRegistryIfExists(at: registryURL, agent: harness.agent)
-                refs.append(contentsOf: registry.instructions)
+                let harnessURL = directoryURL.appending(path: harness.file)
+                refs.append(contentsOf: try InstructionManager.instructionRefs(in: harnessURL))
             }
 
-            var seen: Set<TargetInstructionRef> = []
-            projectSpells[target.id] = refs.compactMap { ref in
-                guard !seen.contains(ref) else {
-                    return nil
-                }
-                seen.insert(ref)
-                return index[ref.id]
+            var seenRefs: Set<TargetInstructionRef> = []
+            let uniqueRefs = refs.filter { ref in
+                seenRefs.insert(ref).inserted
             }
+            refsByTargetID[target.id] = uniqueRefs
+            spellsByTargetID[target.id] = uniqueRefs.compactMap { index[$0.id] }
         }
 
-        return projectSpells
+        return ProjectInstructionState(refsByTargetID: refsByTargetID, spellsByTargetID: spellsByTargetID)
     }
 
-    private func ensureProjectPackage(for target: SpellbookTarget, directoryURL: URL) throws {
-        try InstructionManager.apply(directoryURL: directoryURL, harnessFileNames: target.harnesses.map(\.file))
+    private func ensureHarnessBlocks(for target: SpellbookTarget, directoryURL: URL) throws {
+        try InstructionManager.apply(directoryURL: directoryURL, harnessFileNames: target.harnesses.map(\.file), installedSpells: spells)
+    }
+
+    private func ensureLocalVersionIsComplete(uid: String, version: Int) throws {
+        let indexURL = SpellbookUserStoreLayout.instructionIndexURL(uid: uid, version: version)
+        let specURL = SpellbookUserStoreLayout.specURL(uid: uid, version: version)
+        guard FileManager.default.fileExists(atPath: indexURL.path(percentEncoded: false)),
+              FileManager.default.fileExists(atPath: specURL.path(percentEncoded: false)) else {
+            throw SpellbookError.message("Sync \(uid)@\(version) before installing it into a target.")
+        }
     }
 
     private func hydrate(_ spells: [Spell]) -> [Spell] {
@@ -615,66 +618,130 @@ final class LocalSpellStore: ObservableObject {
         return try? String(contentsOf: markdownURL, encoding: .utf8)
     }
 
-    private func normalizeSystemRegistryIfNeeded() throws {
-        guard FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.systemRegistryURL.path(percentEncoded: false)) else {
-            return
+    private func scanInstructionStore() throws -> LocalInstructionScan {
+        let now = ISO8601DateFormatter.spellbook.string(from: Date())
+        var scannedSpells: [Spell] = []
+        var scanDiagnostics: [SpellbookDiagnostic] = []
+        let rootURL = SpellbookUserStoreLayout.instructionsDirectoryURL
+
+        guard FileManager.default.fileExists(atPath: rootURL.path(percentEncoded: false)) else {
+            return LocalInstructionScan(spells: [], diagnostics: [])
         }
 
-        let registry = try loadRegistryIfExists(at: SpellbookUserStoreLayout.systemRegistryURL)
-        guard !registry.usesCompactEntries else {
-            return
+        let uidDirectories = try FileManager.default.contentsOfDirectory(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        for uidDirectory in uidDirectories where uidDirectory.spellbookIsDirectory {
+            let pathUID = uidDirectory.lastPathComponent
+            let versionDirectories = try FileManager.default.contentsOfDirectory(
+                at: uidDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+
+            for versionDirectory in versionDirectories where versionDirectory.spellbookIsDirectory {
+                guard let pathVersion = Int(versionDirectory.lastPathComponent), pathVersion > 0 else {
+                    continue
+                }
+
+                let indexURL = versionDirectory.appending(path: SpellbookUserStoreLayout.instructionIndexFileName)
+                let specURL = versionDirectory.appending(path: SpellbookUserStoreLayout.specFileName)
+                let hasIndex = FileManager.default.fileExists(atPath: indexURL.path(percentEncoded: false))
+                let hasSpec = FileManager.default.fileExists(atPath: specURL.path(percentEncoded: false))
+
+                guard hasIndex, hasSpec else {
+                    scanDiagnostics.append(SpellbookDiagnostic(
+                        type: "incomplete_instruction_version",
+                        severity: "warning",
+                        targetRoot: nil,
+                        agent: nil,
+                        uid: pathUID,
+                        version: pathVersion,
+                        message: "\(pathUID)@\(pathVersion) is missing \(hasIndex ? "SPEC.md" : hasSpec ? "index.json" : "index.json and SPEC.md").",
+                        detectedAt: now
+                    ))
+                    continue
+                }
+
+                do {
+                    let data = try Data(contentsOf: indexURL)
+                    var spell = try JSONDecoder.spellbook.decode(Spell.self, from: data)
+                    let metadataUID = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    spell.uid = metadataUID?.isEmpty == false ? metadataUID : pathUID
+                    spell.localID = nil
+                    spell.file = ""
+                    if spell.normalizedVersion != pathVersion {
+                        scanDiagnostics.append(SpellbookDiagnostic(
+                            type: "instruction_metadata_mismatch",
+                            severity: "warning",
+                            targetRoot: nil,
+                            agent: nil,
+                            uid: spell.uid,
+                            version: pathVersion,
+                            message: "\(pathUID)@\(pathVersion) has index.json version \(spell.normalizedVersion).",
+                            detectedAt: now
+                        ))
+                    }
+                    spell.version = pathVersion
+                    spell.content = try String(contentsOf: specURL, encoding: .utf8)
+                    if spell.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        spell.trigger = Spell.trigger(from: spell.content ?? "") ?? ""
+                    }
+                    if let uid = spell.uid, spell.ownerEmail == nil {
+                        spell.ownerEmail = ownerEmail(for: uid)
+                    }
+                    scannedSpells.append(spell)
+                } catch {
+                    scanDiagnostics.append(SpellbookDiagnostic(
+                        type: "malformed_instruction_metadata",
+                        severity: "warning",
+                        targetRoot: nil,
+                        agent: nil,
+                        uid: pathUID,
+                        version: pathVersion,
+                        message: "\(pathUID)@\(pathVersion) has unreadable index.json metadata.",
+                        detectedAt: now
+                    ))
+                }
+            }
         }
 
-        let hydratedSpells = hydrate(registry.spells)
-        for spell in hydratedSpells {
-            try writeMetadata(for: spell)
+        scannedSpells.sort {
+            if ($0.uid ?? "") == ($1.uid ?? "") {
+                return $0.normalizedVersion > $1.normalizedVersion
+            }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
 
-        try saveSystemRegistry(SpellRegistry(schemaVersion: registry.schemaVersion, spells: hydratedSpells, usesCompactEntries: true))
+        return LocalInstructionScan(spells: scannedSpells, diagnostics: scanDiagnostics)
     }
 
     private func migrateLegacySystemRegistryIfNeeded() throws {
-        guard FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.legacyLibraryURL.path(percentEncoded: false)) else {
-            return
-        }
+        let sourceURLs = [
+            SpellbookUserStoreLayout.legacyLibraryURL,
+            SpellbookUserStoreLayout.legacySystemRegistryURL
+        ]
 
-        let newRegistryExists = FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.systemRegistryURL.path(percentEncoded: false))
-        if newRegistryExists, !(try loadSystemRegistry().spells.isEmpty) {
-            return
-        }
-
-        let legacy = try loadRegistryIfExists(at: SpellbookUserStoreLayout.legacyLibraryURL)
-        var migrated = SpellRegistry.empty
-        for spell in legacy.spells {
-            guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
-                continue
+        for sourceURL in sourceURLs where FileManager.default.fileExists(atPath: sourceURL.path(percentEncoded: false)) {
+            let registry = try loadRegistryIfExists(at: sourceURL)
+            for spell in hydrate(registry.spells) {
+                try migrateLegacySpellIfComplete(spell)
             }
-
-            var incoming = spell
-            incoming.uid = uid
-            incoming.localID = nil
-            incoming.file = ""
-            incoming.version = incoming.normalizedVersion
-            incoming.content = incoming.content ?? legacyMarkdownContent(for: spell)
-            migrated.spells.append(incoming)
-            rememberOwner(for: incoming)
-            try writeMetadata(for: incoming)
-            try writeMarkdown(for: incoming)
         }
-
-        try saveSystemRegistry(migrated)
     }
 
     private func migrateSandboxedSystemStoreIfNeeded() throws {
         guard let sandboxRootURL = SpellbookUserStoreLayout.sandboxContainerRootURL,
-              FileManager.default.fileExists(atPath: sandboxRootURL.path(percentEncoded: false)),
-              (try loadSystemRegistry().spells.isEmpty) else {
+              FileManager.default.fileExists(atPath: sandboxRootURL.path(percentEncoded: false)) else {
             return
         }
 
         let registryURL = sandboxRootURL
             .appending(path: SpellbookUserStoreLayout.registryDirectoryName, directoryHint: .isDirectory)
-            .appending(path: SpellbookUserStoreLayout.registryFileName)
+            .appending(path: SpellbookUserStoreLayout.legacySystemRegistryFileName)
         let legacyLibraryURL = sandboxRootURL
             .appending(path: SpellbookUserStoreLayout.registryDirectoryName, directoryHint: .isDirectory)
             .appending(path: SpellbookUserStoreLayout.legacyLibraryFileName)
@@ -685,7 +752,6 @@ final class LocalSpellStore: ObservableObject {
         }
 
         let sandboxRegistry = try loadRegistryIfExists(at: sourceURL)
-        var migrated = SpellRegistry.empty
         for spell in sandboxRegistry.spells {
             guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
                 continue
@@ -697,15 +763,32 @@ final class LocalSpellStore: ObservableObject {
             incoming.file = ""
             incoming.version = incoming.normalizedVersion
             incoming.content = incoming.content ?? sandboxedMarkdownContent(for: spell, sandboxRootURL: sandboxRootURL)
-            migrated.spells.append(incoming)
-            rememberOwner(for: incoming)
-            try writeMetadata(for: incoming)
-            try writeMarkdown(for: incoming)
+            try migrateLegacySpellIfComplete(incoming)
+        }
+    }
+
+    private func migrateLegacySpellIfComplete(_ spell: Spell) throws {
+        guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
+            return
         }
 
-        if !migrated.spells.isEmpty {
-            try saveSystemRegistry(migrated)
+        var incoming = spell
+        incoming.uid = uid
+        incoming.localID = nil
+        incoming.file = ""
+        incoming.version = incoming.normalizedVersion
+        incoming.content = incoming.content ?? legacyMarkdownContent(for: spell)
+
+        let hasUsableMetadata = !incoming.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !incoming.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !incoming.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard hasUsableMetadata || incoming.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return
         }
+
+        rememberOwner(for: incoming)
+        try writeMetadata(for: incoming)
+        try writeMarkdown(for: incoming)
     }
 
     private func legacyMarkdownContent(for spell: Spell) -> String? {
@@ -753,47 +836,37 @@ final class LocalSpellStore: ObservableObject {
         return instructionsURLs + legacyURLs
     }
 
-    private func scanKnownTargetsAndWriteErrors(systemSpells: [Spell]) throws -> [SpellbookDiagnostic] {
+    private func scanKnownTargets(systemSpells: [Spell]) throws -> [SpellbookDiagnostic] {
         let now = ISO8601DateFormatter.spellbook.string(from: Date())
-        var errors: [SpellbookDiagnostic] = []
-        let installedRefs = Set(systemSpells.compactMap { spell -> TargetInstructionRef? in
+        var warnings: [SpellbookDiagnostic] = []
+        let spellsByRef = systemSpells.compactMap { spell -> (String, Spell)? in
             guard let uid = spell.uid else {
                 return nil
             }
-            return TargetInstructionRef(uid: uid, version: spell.normalizedVersion)
-        })
-
-        if !FileManager.default.isExecutableFile(atPath: SpellbookUserStoreLayout.resolverURL.path(percentEncoded: false)) {
-            errors.append(SpellbookDiagnostic(
-                type: "resolver_missing",
-                severity: "error",
-                targetRoot: nil,
-                agent: nil,
-                uid: nil,
-                version: nil,
-                message: "The Spellbook resolver is missing or is not executable.",
-                detectedAt: now
-            ))
+            return (TargetInstructionRef(uid: uid, version: spell.normalizedVersion).id, spell)
+        }
+        .reduce(into: [String: Spell]()) { result, pair in
+            result[pair.0] = pair.1
         }
 
         for target in targets {
             let directoryExists = FileManager.default.fileExists(atPath: target.directoryPath)
             guard directoryExists else {
-                errors.append(SpellbookDiagnostic(
+                warnings.append(SpellbookDiagnostic(
                     type: "stale_target",
                     severity: "warning",
                     targetRoot: target.directoryPath,
                     agent: nil,
                     uid: nil,
                     version: nil,
-                    message: "The target path no longer exists.",
+                    message: "The target path no longer exists. Relink the target or remove it.",
                     detectedAt: now
                 ))
                 continue
             }
 
             guard let directoryURL = resolveDirectoryURL(for: target) else {
-                errors.append(SpellbookDiagnostic(
+                warnings.append(SpellbookDiagnostic(
                     type: "target_access_failed",
                     severity: "warning",
                     targetRoot: target.directoryPath,
@@ -806,46 +879,40 @@ final class LocalSpellStore: ObservableObject {
                 continue
             }
 
-            let manifestURL = AgentContextLayout.manifestURL(in: directoryURL)
-            if !FileManager.default.fileExists(atPath: manifestURL.path(percentEncoded: false)) {
-                errors.append(SpellbookDiagnostic(
-                    type: "manifest_missing",
-                    severity: "error",
+            let packageURL = AgentContextLayout.packageURL(in: directoryURL)
+            if FileManager.default.fileExists(atPath: packageURL.path(percentEncoded: false)) {
+                warnings.append(SpellbookDiagnostic(
+                    type: "legacy_agent_context_package_present",
+                    severity: "warning",
                     targetRoot: target.directoryPath,
                     agent: nil,
                     uid: nil,
                     version: nil,
-                    message: ".agent-context/manifest.json is missing.",
-                    detectedAt: now
-                ))
-            } else if (try? JSONDecoder.spellbook.decode(AgentContextManifest.self, from: Data(contentsOf: manifestURL))) == nil {
-                errors.append(SpellbookDiagnostic(
-                    type: "malformed_manifest",
-                    severity: "error",
-                    targetRoot: target.directoryPath,
-                    agent: nil,
-                    uid: nil,
-                    version: nil,
-                    message: ".agent-context/manifest.json is not valid for the Spellbook resolver.",
+                    message: ".agent-context is no longer used. Repair or update the target to migrate entries into harness files.",
                     detectedAt: now
                 ))
             }
 
             for harness in target.harnesses {
                 let harnessURL = directoryURL.appending(path: harness.file)
-                if !FileManager.default.fileExists(atPath: harnessURL.path(percentEncoded: false)) {
-                    errors.append(SpellbookDiagnostic(
+                guard FileManager.default.fileExists(atPath: harnessURL.path(percentEncoded: false)) else {
+                    warnings.append(SpellbookDiagnostic(
                         type: "harness_missing",
                         severity: "warning",
                         targetRoot: target.directoryPath,
                         agent: harness.agent,
                         uid: nil,
                         version: nil,
-                        message: "\(harness.file) is missing.",
+                        message: "\(harness.file) is missing. Recreate the harness file or remove it from this target.",
                         detectedAt: now
                     ))
-                } else if (try? String(contentsOf: harnessURL, encoding: .utf8).contains(InstructionManager.startMarker)) != true {
-                    errors.append(SpellbookDiagnostic(
+                    continue
+                }
+
+                let content = try String(contentsOf: harnessURL, encoding: .utf8)
+                let parseResult = InstructionManager.parseManagedBlock(in: content)
+                guard parseResult.hasManagedBlock else {
+                    warnings.append(SpellbookDiagnostic(
                         type: "managed_block_missing",
                         severity: "warning",
                         targetRoot: target.directoryPath,
@@ -855,55 +922,74 @@ final class LocalSpellStore: ObservableObject {
                         message: "\(harness.file) does not contain the Spellbook managed block.",
                         detectedAt: now
                     ))
+                    warnings.append(contentsOf: parseResult.issues.map { issue in
+                        diagnostic(from: issue, target: target, harness: harness, detectedAt: now)
+                    })
+                    continue
                 }
 
-                let registryURL = target.registryURL(in: directoryURL, agent: harness.agent)
-                guard FileManager.default.fileExists(atPath: registryURL.path(percentEncoded: false)) else {
-                    errors.append(SpellbookDiagnostic(
-                        type: "target_registry_missing",
-                        severity: "error",
+                warnings.append(contentsOf: parseResult.issues.map { issue in
+                    diagnostic(from: issue, target: target, harness: harness, detectedAt: now)
+                })
+
+                var seenUIDs: Set<String> = []
+                var duplicateUIDs: Set<String> = []
+                for entry in parseResult.entries {
+                    if !seenUIDs.insert(entry.uid).inserted {
+                        duplicateUIDs.insert(entry.uid)
+                    }
+                }
+
+                for duplicateUID in duplicateUIDs.sorted() {
+                    warnings.append(SpellbookDiagnostic(
+                        type: "duplicate_instruction_entry",
+                        severity: "warning",
+                        targetRoot: target.directoryPath,
+                        agent: harness.agent,
+                        uid: duplicateUID,
+                        version: nil,
+                        message: "\(harness.file) contains duplicate Spellbook entries for \(duplicateUID).",
+                        detectedAt: now
+                    ))
+                }
+
+                if parseResult.issues.isEmpty,
+                   let block = parseResult.block,
+                   let expectedBlock = InstructionManager.expectedManagedBlock(
+                    for: parseResult.entries.map(\.ref),
+                    spellsByRef: spellsByRef
+                   ),
+                   block.trimmingCharacters(in: .whitespacesAndNewlines) != expectedBlock.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    warnings.append(SpellbookDiagnostic(
+                        type: "managed_block_mismatch",
+                        severity: "warning",
                         targetRoot: target.directoryPath,
                         agent: harness.agent,
                         uid: nil,
                         version: nil,
-                        message: "\(harness.registry) is missing.",
+                        message: "\(harness.file)'s Spellbook block differs from the managed template or local instruction metadata.",
                         detectedAt: now
                     ))
-                    continue
                 }
 
-                guard let registry = try? loadTargetRegistryIfExists(at: registryURL, agent: harness.agent) else {
-                    errors.append(SpellbookDiagnostic(
-                        type: "malformed_target_registry",
-                        severity: "error",
-                        targetRoot: target.directoryPath,
-                        agent: harness.agent,
-                        uid: nil,
-                        version: nil,
-                        message: "\(harness.registry) is not valid JSON.",
-                        detectedAt: now
-                    ))
-                    continue
-                }
-
-                for ref in registry.instructions {
-                    if !installedRefs.contains(ref) {
-                        errors.append(SpellbookDiagnostic(
+                for entry in parseResult.entries {
+                    let ref = entry.ref
+                    if spellsByRef[ref.id] == nil {
+                        warnings.append(SpellbookDiagnostic(
                             type: "missing_instruction_version",
                             severity: "warning",
                             targetRoot: target.directoryPath,
                             agent: harness.agent,
                             uid: ref.uid,
                             version: ref.version,
-                            message: "Target references \(ref.uid)@\(ref.version), but that version is not installed.",
+                            message: "Target references \(ref.uid)@\(ref.version), but that complete local version is not installed.",
                             detectedAt: now
                         ))
-                        continue
                     }
 
                     let indexURL = SpellbookUserStoreLayout.instructionIndexURL(uid: ref.uid, version: ref.version)
                     if !FileManager.default.fileExists(atPath: indexURL.path(percentEncoded: false)) {
-                        errors.append(SpellbookDiagnostic(
+                        warnings.append(SpellbookDiagnostic(
                             type: "missing_instruction_metadata",
                             severity: "warning",
                             targetRoot: target.directoryPath,
@@ -917,7 +1003,7 @@ final class LocalSpellStore: ObservableObject {
 
                     let specURL = SpellbookUserStoreLayout.specURL(uid: ref.uid, version: ref.version)
                     if !FileManager.default.fileExists(atPath: specURL.path(percentEncoded: false)) {
-                        errors.append(SpellbookDiagnostic(
+                        warnings.append(SpellbookDiagnostic(
                             type: "missing_instruction_spec",
                             severity: "warning",
                             targetRoot: target.directoryPath,
@@ -932,27 +1018,31 @@ final class LocalSpellStore: ObservableObject {
             }
         }
 
-        try saveErrors(SpellbookErrorsRegistry(schemaVersion: 1, errors: errors))
-        try writeKnownTargets(lastScannedAt: now)
-        return errors
+        try writeKnownTargets()
+        return warnings
     }
 
-    private func saveErrors(_ registry: SpellbookErrorsRegistry) throws {
-        let data = try JSONEncoder.spellbook.encode(registry)
-        try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.errorsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: SpellbookUserStoreLayout.errorsURL, options: [.atomic])
+    private func diagnostic(
+        from issue: HarnessInstructionIssue,
+        target: SpellbookTarget,
+        harness: SpellbookHarness,
+        detectedAt: String
+    ) -> SpellbookDiagnostic {
+        SpellbookDiagnostic(
+            type: issue.type,
+            severity: "warning",
+            targetRoot: target.directoryPath,
+            agent: harness.agent,
+            uid: issue.uid,
+            version: issue.version,
+            message: issue.message,
+            detectedAt: detectedAt
+        )
     }
 
-    private func writeKnownTargets(lastScannedAt: String?) throws {
+    private func writeKnownTargets() throws {
         let knownTargets = targets.map { target in
-            KnownTarget(
-                id: target.id,
-                targetRoot: target.directoryPath,
-                agentContext: "\(AgentContextLayout.packageDirectoryName)/\(AgentContextLayout.manifestFileName)",
-                harnesses: target.harnesses,
-                addedAt: target.addedAt,
-                lastScannedAt: lastScannedAt
-            )
+            KnownTarget(root: target.directoryPath, harnessFiles: target.harnesses.map(\.file))
         }
         let registry = KnownTargetsRegistry(schemaVersion: 1, targets: knownTargets)
         let data = try JSONEncoder.spellbook.encode(registry)
@@ -990,11 +1080,30 @@ final class LocalSpellStore: ObservableObject {
             return
         }
 
+        restoreKnownTargetsRegistry()
         restoreLegacyTarget()
     }
 
+    private func restoreKnownTargetsRegistry() {
+        guard FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.targetsURL.path(percentEncoded: false)),
+              let data = try? Data(contentsOf: SpellbookUserStoreLayout.targetsURL),
+              let registry = try? JSONDecoder.spellbook.decode(KnownTargetsRegistry.self, from: data) else {
+            return
+        }
+
+        targets = registry.targets.map { knownTarget in
+            SpellbookTarget(
+                id: knownTarget.root,
+                name: SpellbookTarget.displayName(for: knownTarget.root),
+                directoryPath: knownTarget.root,
+                harnesses: knownTarget.harnesses
+            )
+        }
+    }
+
     private func restoreLegacyTarget() {
-        guard let data = UserDefaults.standard.data(forKey: legacyBookmarkKey) else {
+        guard targets.isEmpty,
+              let data = UserDefaults.standard.data(forKey: legacyBookmarkKey) else {
             return
         }
 
@@ -1036,7 +1145,14 @@ final class LocalSpellStore: ObservableObject {
     private func persistTargets() throws {
         let data = try JSONEncoder.spellbook.encode(targets)
         UserDefaults.standard.set(data, forKey: targetsKey)
-        try writeKnownTargets(lastScannedAt: nil)
+        try writeKnownTargets()
+    }
+
+    private func mergedHarnesses(_ existingHarnesses: [SpellbookHarness], _ incomingHarnesses: [SpellbookHarness]) -> [SpellbookHarness] {
+        let files = Set(existingHarnesses.map(\.file)).union(incomingHarnesses.map(\.file))
+        return InstructionManager.supportedFiles
+            .filter { files.contains($0) }
+            .map { SpellbookHarness(file: $0) }
     }
 
     private func startAccessing(_ url: URL) {

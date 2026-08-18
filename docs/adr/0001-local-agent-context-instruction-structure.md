@@ -1,5 +1,6 @@
 ---
-status: proposed
+status: superseded
+superseded_by: ADR-0002
 gist: https://gist.github.com/andygruening/c6c9fff424d702d0bad8a4a6c09186b5
 ---
 

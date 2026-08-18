@@ -1298,13 +1298,13 @@ struct ProjectsView: View {
                     expandedTargetIDs.insert(target.id)
                     persistExpandedTargetIDs()
                 }
-                statusMessage = "Added \(name)."
+                statusMessage = "Added \(SpellbookTarget.displayName(for: directoryURL.path(percentEncoded: false)))."
             }
         }
         .sheet(item: $editingTarget) { target in
             TargetFormView(mode: .edit(target), initialDirectoryURL: localStore.directoryURL(for: target)) { directoryURL, harnessFileNames, name in
                 try localStore.updateTarget(target, directoryURL: directoryURL, harnessFileNames: harnessFileNames, name: name)
-                statusMessage = "Updated \(name)."
+                statusMessage = "Updated \(SpellbookTarget.displayName(for: directoryURL.path(percentEncoded: false)))."
             }
         }
         .sheet(item: $reviewingTarget) { target in
@@ -2073,7 +2073,7 @@ struct TargetFormView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(mode.title)
                     .font(.title2.bold())
-                Text("Choose the directory and instruction file Spellbook should manage.")
+                Text("Choose the directory and harness files Spellbook should manage.")
                     .foregroundStyle(.secondary)
             }
 
@@ -2109,9 +2109,12 @@ struct TargetFormView: View {
                     }
                 }
 
-                LabeledContent("Project name") {
-                    TextField("Project name", text: $targetName)
-                        .textFieldStyle(.roundedBorder)
+                if let directoryURL {
+                    LabeledContent("Project name") {
+                        Text(SpellbookTarget.displayName(for: directoryURL.path(percentEncoded: false)))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
 
@@ -2128,7 +2131,7 @@ struct TargetFormView: View {
                     Label(mode.buttonTitle, systemImage: "checkmark")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(directoryURL == nil || trimmed(targetName).isEmpty || selectedHarnessFiles.isEmpty)
+                .disabled(directoryURL == nil || selectedHarnessFiles.isEmpty)
             }
         }
         .padding(24)
@@ -2149,9 +2152,7 @@ struct TargetFormView: View {
         }
 
         directoryURL = url
-        if trimmed(targetName).isEmpty {
-            targetName = url.lastPathComponent.isEmpty ? url.path(percentEncoded: false) : url.lastPathComponent
-        }
+        targetName = SpellbookTarget.displayName(for: url.path(percentEncoded: false))
         selectedHarnessFiles = Set(InstructionManager.defaultHarnessFileNames(in: url))
         errorMessage = nil
     }
@@ -2162,19 +2163,13 @@ struct TargetFormView: View {
             return
         }
 
-        let name = trimmed(targetName)
-        guard !name.isEmpty else {
-            errorMessage = "Enter a project name."
-            return
-        }
-
         guard !selectedHarnessFiles.isEmpty else {
             errorMessage = "Enable at least one harness file."
             return
         }
 
         do {
-            try onSave(directoryURL, orderedSelectedHarnessFiles(), name)
+            try onSave(directoryURL, orderedSelectedHarnessFiles(), SpellbookTarget.displayName(for: directoryURL.path(percentEncoded: false)))
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -2274,13 +2269,9 @@ struct TargetInstructionReviewView: View {
                         PreviewValue(label: "Agent", value: preview.agent)
                         PreviewValue(label: "Instruction", value: preview.isInstalled ? "Installed" : "Not installed")
                         PreviewValue(label: "Block", value: preview.action.rawValue)
-                        PreviewValue(label: ".agent-context", value: preview.packageURL.path(percentEncoded: false))
-                        PreviewValue(label: "manifest.json", value: preview.manifestExists ? "Exists" : "Will create")
-                        PreviewValue(label: preview.registryURL.lastPathComponent, value: preview.registryExists ? "Exists" : "Will create")
-                        PreviewValue(label: "~/.spellbook/registry/registry.json", value: preview.systemRegistryExists ? "Exists" : "Will create")
+                        PreviewValue(label: "Managed entries", value: "\(preview.managedInstructionCount)")
+                        PreviewValue(label: "~/.spellbook/instructions", value: preview.instructionStoreExists ? "Exists" : "Will create")
                         PreviewValue(label: "~/.spellbook/registry/targets.json", value: preview.targetsExists ? "Exists" : "Will create")
-                        PreviewValue(label: "~/.spellbook/registry/errors.json", value: preview.errorsExists ? "Exists" : "Will create")
-                        PreviewValue(label: "Resolver", value: preview.resolverExists ? "Executable" : "Will install")
                     }
 
                     ScrollView {
@@ -2330,11 +2321,15 @@ struct TargetInstructionReviewView: View {
                 throw SpellbookError.message("Choose the target directory again.")
             }
 
-            try InstructionManager.apply(directoryURL: directoryURL, harnessFileNames: target.harnesses.map(\.file))
+            try InstructionManager.apply(
+                directoryURL: directoryURL,
+                harnessFileNames: target.harnesses.map(\.file),
+                installedSpells: localStore.spells
+            )
             try localStore.refresh()
             errorMessage = nil
             reviewInstruction()
-            statusMessage = "Applied Spellbook instruction."
+            statusMessage = "Applied Spellbook managed block."
         } catch {
             errorMessage = error.localizedDescription
         }

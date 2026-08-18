@@ -47,62 +47,56 @@ npm run deploy:web:preview
 
 ## Local Agent Context Files
 
-Each target directory stores an `.agent-context/` package next to its `AGENTS.md`, `AGENT.md`, or `CLAUDE.md` file. Target registries are agent-specific and contain only pinned instruction references:
+Each target directory uses the selected harness files, such as `AGENTS.md`, `AGENT.md`, or `CLAUDE.md`, as the target-level source of truth. The macOS app writes one managed Spellbook block into each selected harness file:
 
-```text
-.agent-context/
-  manifest.json
-  codex.registry.json
-  claude.registry.json
+```md
+<!-- spellbook:start -->
+## Spellbook Instructions
+
+The Spellbook app manages this block. Do not edit it by hand.
+
+For every task, check these Spellbook instruction triggers. When a trigger matches, read the linked `SPEC.md` and follow it. If a referenced file is missing or unreadable, report it in chat and continue without that Spellbook instruction.
+
+<!-- spellbook:instruction:start uid="server-id-after-publish" version="3" -->
+Trigger: when the instruction trigger applies.
+File: ~/.spellbook/instructions/server-id-after-publish/3/SPEC.md
+<!-- spellbook:instruction:end -->
+
+<!-- spellbook:end -->
 ```
 
-The machine-local Spellbook store keeps the installed instruction metadata, known targets, current diagnostics, a stable resolver symlink, and versioned `SPEC.md` bodies:
+The machine-local Spellbook store keeps the installed instruction metadata, known targets, and versioned `SPEC.md` bodies:
 
 ```text
 ~/.spellbook/
-  bin/
-    spellbook-agent-context
   registry/
-    registry.json
     targets.json
-    errors.json
   instructions/
     <uid>/
       <version>/
+        index.json
         SPEC.md
 ```
 
-Target registries use this lightweight shape:
+Known targets use the selected root directory plus harness file names:
 
 ```json
 {
   "schema_version": 1,
-  "agent": "codex",
-  "instructions": [
+  "targets": [
     {
-      "uid": "server-id-after-publish",
-      "version": 3
+      "root": "/Users/agruning/Documents/raddus-spellbook",
+      "harness_files": ["AGENTS.md", "CLAUDE.md"]
     }
   ]
 }
 ```
 
-The system registry at `~/.spellbook/registry/registry.json` contains the full metadata for each installed `(uid, version)` pair. Unpublished drafts stay private to the macOS app and cannot be installed into target registries until they are published or synced and have a backend `uid`.
+The app discovers locally installed instruction versions by scanning `~/.spellbook/instructions/<uid>/<version>/`. A version is complete only when both `index.json` and `SPEC.md` exist. Unpublished drafts stay private to the macOS app and cannot be installed into target harnesses until they are published or synced and have a backend `uid`.
 
-Agent harnesses call the resolver instead of reading registries directly:
+JSON Schemas for instruction version indexes and known targets live in `docs/schemas/`.
 
-```bash
-~/.spellbook/bin/spellbook-agent-context list-triggers \
-  --target "$PWD" \
-  --harness-root "$HOME/.codex" \
-  --agent codex
-```
-
-The resolver merges pinned refs from the current project target and the harness root, then resolves metadata and `SPEC.md` bodies from `~/.spellbook`. A missing `.agent-context/` package or an empty registry on either side returns an empty instruction set without diagnostics.
-
-JSON Schemas for the manifest, target registries, system registry, known targets, and diagnostics live in `docs/schemas/`.
-
-The macOS app is sandboxed, but Spellbook intentionally resolves `~/.spellbook` to the real account home directory, not the app container. The app has a home-relative sandbox exception for `/.spellbook/`, installs the resolver path as a symlink to the signed helper inside the app bundle, and has a Settings repair action that migrates UID-backed instructions from the older container-local store when needed.
+The macOS app is sandboxed, but Spellbook intentionally resolves `~/.spellbook` to the real account home directory, not the app container. The app has a home-relative sandbox exception for `/.spellbook/` and has a Settings repair action that migrates UID-backed instructions from the older container-local store when needed.
 
 ## Run The macOS App
 

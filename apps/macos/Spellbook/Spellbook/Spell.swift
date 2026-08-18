@@ -377,12 +377,36 @@ struct TargetInstructionRegistry: Codable, Equatable {
 }
 
 struct SpellbookHarness: Identifiable, Codable, Equatable, Hashable {
-    var agent: String
     var file: String
-    var registry: String
 
     var id: String {
-        agent
+        file
+    }
+
+    var agent: String {
+        AgentContextLayout.agentName(for: file)
+    }
+
+    init(file: String) {
+        self.file = file
+    }
+
+    init(agent _: String, file: String, registry _: String) {
+        self.file = file
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        file = try container.decode(String.self, forKey: .file)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(file, forKey: .file)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case file
     }
 }
 
@@ -399,32 +423,47 @@ struct KnownTargetsRegistry: Codable, Equatable {
 }
 
 struct KnownTarget: Codable, Equatable, Identifiable {
-    var id: String
-    var targetRoot: String
-    var agentContext: String
-    var harnesses: [SpellbookHarness]
-    var addedAt: String
-    var lastScannedAt: String?
+    var root: String
+    var harnessFiles: [String]
 
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case targetRoot = "target_root"
-        case agentContext = "agent_context"
-        case harnesses
-        case addedAt = "added_at"
-        case lastScannedAt = "last_scanned_at"
+    var id: String {
+        root
     }
-}
 
-struct SpellbookErrorsRegistry: Codable, Equatable {
-    var schemaVersion: Int
-    var errors: [SpellbookDiagnostic]
+    var harnesses: [SpellbookHarness] {
+        harnessFiles.map { SpellbookHarness(file: $0) }
+    }
 
-    static let empty = SpellbookErrorsRegistry(schemaVersion: 1, errors: [])
+    init(root: String, harnessFiles: [String]) {
+        self.root = root
+        self.harnessFiles = harnessFiles
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        root = try container.decodeIfPresent(String.self, forKey: .root)
+            ?? container.decode(String.self, forKey: .targetRoot)
+
+        if let decodedFiles = try container.decodeIfPresent([String].self, forKey: .harnessFiles) {
+            harnessFiles = decodedFiles
+        } else if let decodedHarnesses = try container.decodeIfPresent([SpellbookHarness].self, forKey: .harnesses) {
+            harnessFiles = decodedHarnesses.map(\.file)
+        } else {
+            harnessFiles = [InstructionManager.supportedFiles[0]]
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(root, forKey: .root)
+        try container.encode(harnessFiles, forKey: .harnessFiles)
+    }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version"
-        case errors
+        case root
+        case targetRoot = "target_root"
+        case harnesses
+        case harnessFiles = "harness_files"
     }
 }
 

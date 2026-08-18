@@ -19,33 +19,7 @@
 		A10100000000000000000010 /* URL+Spellbook.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10200000000000000000010 /* URL+Spellbook.swift */; };
 		A10100000000000000000011 /* DeepLinkModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10200000000000000000013 /* DeepLinkModel.swift */; };
 		A10100000000000000000012 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10200000000000000000015 /* Assets.xcassets */; };
-		B10100000000000000000001 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10200000000000000000001 /* main.swift */; };
-		B10100000000000000000002 /* spellbook-agent-context in Copy Resolver */ = {isa = PBXBuildFile; fileRef = B10200000000000000000002 /* spellbook-agent-context */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
-
-/* Begin PBXContainerItemProxy section */
-		B11100000000000000000001 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = A10900000000000000000001 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = B10500000000000000000001;
-			remoteInfo = SpellbookAgentContext;
-		};
-/* End PBXContainerItemProxy section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		B10700000000000000000001 /* Copy Resolver */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 6;
-			files = (
-				B10100000000000000000002 /* spellbook-agent-context in Copy Resolver */,
-			);
-			name = "Copy Resolver";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A10200000000000000000001 /* AuthViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthViews.swift; sourceTree = "<group>"; };
@@ -63,19 +37,10 @@
 		A10200000000000000000013 /* DeepLinkModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkModel.swift; sourceTree = "<group>"; };
 		A10200000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10200000000000000000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		B10200000000000000000001 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		B10200000000000000000002 /* spellbook-agent-context */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "spellbook-agent-context"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A10300000000000000000001 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		B10300000000000000000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -89,7 +54,6 @@
 			isa = PBXGroup;
 			children = (
 				A10400000000000000000002 /* Spellbook */,
-				B10400000000000000000001 /* SpellbookAgentContext */,
 				A10400000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -119,17 +83,8 @@
 			isa = PBXGroup;
 			children = (
 				A10200000000000000000012 /* Raddus Spellbook.app */,
-				B10200000000000000000002 /* spellbook-agent-context */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		B10400000000000000000001 /* SpellbookAgentContext */ = {
-			isa = PBXGroup;
-			children = (
-				B10200000000000000000001 /* main.swift */,
-			);
-			path = SpellbookAgentContext;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -142,33 +97,15 @@
 				A10600000000000000000001 /* Sources */,
 				A10300000000000000000001 /* Frameworks */,
 				A10700000000000000000001 /* Resources */,
-				B10700000000000000000001 /* Copy Resolver */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				B11200000000000000000001 /* PBXTargetDependency */,
 			);
 			name = Spellbook;
 			productName = Spellbook;
 			productReference = A10200000000000000000012 /* Raddus Spellbook.app */;
 			productType = "com.apple.product-type.application";
-		};
-		B10500000000000000000001 /* SpellbookAgentContext */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = B10800000000000000000001 /* Build configuration list for PBXNativeTarget "SpellbookAgentContext" */;
-			buildPhases = (
-				B10600000000000000000001 /* Sources */,
-				B10300000000000000000001 /* Frameworks */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = SpellbookAgentContext;
-			productName = "spellbook-agent-context";
-			productReference = B10200000000000000000002 /* spellbook-agent-context */;
-			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
 
@@ -181,9 +118,6 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					A10500000000000000000001 = {
-						CreatedOnToolsVersion = 16.0;
-					};
-					B10500000000000000000001 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
@@ -202,7 +136,6 @@
 			projectRoot = "";
 			targets = (
 				A10500000000000000000001 /* Spellbook */,
-				B10500000000000000000001 /* SpellbookAgentContext */,
 			);
 		};
 /* End PBXProject section */
@@ -237,23 +170,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		B10600000000000000000001 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				B10100000000000000000001 /* main.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		B11200000000000000000001 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = B10500000000000000000001 /* SpellbookAgentContext */;
-			targetProxy = B11100000000000000000001 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A11000000000000000000001 /* Debug */ = {
@@ -425,44 +342,6 @@
 			};
 			name = Release;
 		};
-		B11000000000000000000001 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 5987P7MLK8;
-				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.raddus.spellbook.agent-context";
-				PRODUCT_NAME = "spellbook-agent-context";
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Debug;
-		};
-		B11000000000000000000002 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 5987P7MLK8;
-				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.raddus.spellbook.agent-context";
-				PRODUCT_NAME = "spellbook-agent-context";
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -480,15 +359,6 @@
 			buildConfigurations = (
 				A11000000000000000000003 /* Debug */,
 				A11000000000000000000004 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		B10800000000000000000001 /* Build configuration list for PBXNativeTarget "SpellbookAgentContext" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				B11000000000000000000001 /* Debug */,
-				B11000000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
