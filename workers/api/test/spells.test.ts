@@ -33,6 +33,18 @@ describe("spell helpers", () => {
     ).toThrow("Instruction files must live under ./instructions and end in .md.");
   });
 
+  it("rejects non-string instruction file paths", () => {
+    expect(() =>
+      parseSpellInput({
+        name: "Bad Path Type",
+        description: "Do not silently replace invalid file values.",
+        trigger: "Use when validating spell file paths.",
+        file: 42,
+        content: "# Bad Path Type"
+      })
+    ).toThrow("Instruction files must live under ./instructions and end in .md.");
+  });
+
   it("rejects files outside the instructions directory", () => {
     expect(() =>
       parseSpellInput({
