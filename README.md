@@ -8,6 +8,18 @@ Spellbook is a native macOS app and Cloudflare backend for installing reusable, 
 - `workers/api` - TypeScript Cloudflare Worker API backed by D1.
 - `apps/web` - optional React TypeScript read-only web listing.
 
+## Testing
+
+Install dependencies and run the same checks used by pull request CI:
+
+```bash
+npm ci
+npm run check
+npm test
+```
+
+The `Tests` GitHub Actions workflow runs these commands whenever a pull request is opened, reopened, marked ready for review, or updated with new commits. To make passing tests a merge requirement, configure the default branch protection rule or repository ruleset to require the `All tests` status check before merging.
+
 ## Production API
 
 The macOS and web clients point to:
