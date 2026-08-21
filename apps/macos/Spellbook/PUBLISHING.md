@@ -37,6 +37,17 @@ Spellbook-0.1.0.dmg
 
 Before publishing, test the exported app and the `.dmg` on a machine or macOS user account that does not already have a development build installed.
 
+## ADR-0003 Product Checks
+
+Before publishing an ADR-0003 build, verify that primary app surfaces use the current product vocabulary:
+
+- Workspaces, Packs, Rules, and Settings are the main navigation concepts.
+- Rule creation talks about "Applies when" instead of triggers except in advanced or diagnostic views.
+- Installed rule bodies are written under `~/.spellbook/rules/<uid>/<version>/SPEC.md`.
+- Existing `~/.spellbook/instructions` and `~/.spellbook/spells` content remains discoverable or migratable as legacy data.
+- Pack install is presented as a batch rule install into a workspace, not as durable pack state.
+- Rule and pack drafts are backend-owned; offline draft authoring is not advertised or enabled.
+
 ## Upload to GitHub
 
 1. Open the GitHub repository.

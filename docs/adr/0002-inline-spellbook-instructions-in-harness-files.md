@@ -5,6 +5,8 @@ supersedes: ADR-0001 runtime resolver-loading contract
 
 # App-Written Spellbook Instruction Indexes in Harness Files
 
+Forward pointer: ADR-0003 keeps this managed harness block approach, but renames the product model from instructions/targets to rules/workspaces and moves new local executable rule bodies to `~/.spellbook/rules/<uid>/<version>/SPEC.md`.
+
 Raddus Spellbook will stop asking agent harnesses to run `~/.spellbook/bin/spellbook-agent-context` at task time to discover and read installed instructions. Instead, the macOS app will write a compact managed instruction index directly into the target harness file, such as `AGENTS.md`, with one marked `Trigger` and `File` entry per installed instruction. This removes the runtime binary dependency and per-session resolver overhead without copying full instruction bodies into every target harness file.
 
 ## Decision
