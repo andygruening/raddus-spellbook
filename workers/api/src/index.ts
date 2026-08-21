@@ -35,6 +35,7 @@ import {
   getRuleVersion,
   listMyRules,
   listPublicRules,
+  setRuleStar,
   submitRuleDraft,
   updateRuleDraft
 } from "./rules";
@@ -148,10 +149,20 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
     );
   }
 
+  const ruleStarMatch = url.pathname.match(/^\/api\/rules\/([^/]+)\/star$/);
+  if ((request.method === "POST" || request.method === "DELETE") && ruleStarMatch?.[1]) {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return setRuleStar(env, decodeURIComponent(ruleStarMatch[1]), user, request.method === "POST");
+  }
+
   const ruleMatch = url.pathname.match(/^\/api\/rules\/([^/]+)$/);
   if (request.method === "GET" && ruleMatch?.[1]) {
     const user = await authenticateOptionalUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
     return getLatestPublicRule(env, decodeURIComponent(ruleMatch[1]), user?.email ?? null);
+  }
+  if (request.method === "DELETE" && ruleMatch?.[1]) {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return deleteSpell(env, decodeURIComponent(ruleMatch[1]), user);
   }
 
   if (request.method === "GET" && url.pathname === "/api/packs/public") {

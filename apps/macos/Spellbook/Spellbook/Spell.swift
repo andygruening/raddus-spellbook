@@ -2,11 +2,34 @@ import Foundation
 
 enum RuleLifecycleState: String, Codable, Equatable, CaseIterable {
     case draft
-    case submitted
+    case submitted = "submitted_for_review"
     case needsChanges = "needs_changes"
     case approved
     case withdrawn
     case archived
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if value == "submitted" {
+            self = .submitted
+            return
+        }
+
+        guard let state = RuleLifecycleState(rawValue: value) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown rule lifecycle state: \(value)"
+            )
+        }
+
+        self = state
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 
     var label: String {
         switch self {
@@ -111,6 +134,7 @@ struct Spell: Identifiable, Codable, Equatable {
             ?? container.decodeIfPresent(String.self, forKey: .body)
         let decodedTrigger = try container.decodeIfPresent(String.self, forKey: .trigger)
             ?? container.decodeIfPresent(String.self, forKey: .appliesWhen)
+            ?? container.decodeIfPresent(String.self, forKey: .appliesWhenSnake)
             ?? decodedContent.flatMap { Spell.trigger(from: $0) }
 
         uid = try container.decodeIfPresent(String.self, forKey: .uid)
@@ -132,10 +156,12 @@ struct Spell: Identifiable, Codable, Equatable {
         starCount = try container.decodeIfPresent(Int.self, forKey: .starCount) ?? 0
         starredByMe = try container.decodeIfPresent(Bool.self, forKey: .starredByMe) ?? false
         let decodedState = try container.decodeIfPresent(RuleLifecycleState.self, forKey: .lifecycleState)
+            ?? container.decodeIfPresent(RuleLifecycleState.self, forKey: .lifecycleStateSnake)
             ?? container.decodeIfPresent(RuleLifecycleState.self, forKey: .status)
             ?? container.decodeIfPresent(RuleLifecycleState.self, forKey: .state)
         lifecycleState = decodedState
         reviewNotes = try container.decodeIfPresent(String.self, forKey: .reviewNotes)
+            ?? container.decodeIfPresent(String.self, forKey: .reviewNotesSnake)
             ?? container.decodeIfPresent(String.self, forKey: .reviewNote)
     }
 
@@ -145,7 +171,7 @@ struct Spell: Identifiable, Codable, Equatable {
         try container.encode(name, forKey: .name)
         try container.encode(description, forKey: .description)
         try container.encode(trigger, forKey: .trigger)
-        try container.encode(trigger, forKey: .appliesWhen)
+        try container.encode(trigger, forKey: .appliesWhenSnake)
         if !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             try container.encode(file, forKey: .file)
         }
@@ -154,8 +180,8 @@ struct Spell: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(publishedAt, forKey: .publishedAt)
         try container.encode(starCount, forKey: .starCount)
         try container.encode(starredByMe, forKey: .starredByMe)
-        try container.encodeIfPresent(lifecycleState, forKey: .lifecycleState)
-        try container.encodeIfPresent(reviewNotes, forKey: .reviewNotes)
+        try container.encodeIfPresent(lifecycleState, forKey: .state)
+        try container.encodeIfPresent(reviewNotes, forKey: .reviewNotesSnake)
     }
 
     func matchesForInstall(_ other: Spell) -> Bool {
@@ -310,10 +336,12 @@ struct Spell: Identifiable, Codable, Equatable {
         case publishedAt
         case starCount
         case starredByMe
-        case lifecycleState = "lifecycle_state"
+        case lifecycleState
+        case lifecycleStateSnake = "lifecycle_state"
         case status
         case state
-        case reviewNotes = "review_notes"
+        case reviewNotes
+        case reviewNotesSnake = "review_notes"
         case reviewNote = "review_note"
 
         case title
@@ -321,7 +349,8 @@ struct Spell: Identifiable, Codable, Equatable {
         case category
         case requirement
         case trigger
-        case appliesWhen = "applies_when"
+        case appliesWhen
+        case appliesWhenSnake = "applies_when"
         case safePath
         case sourceAgent
         case remoteId
@@ -395,12 +424,23 @@ struct RulePack: Identifiable, Decodable, Equatable {
             ?? container.decodeIfPresent([PackRuleVersionRef].self, forKey: .rules)
             ?? []
         suggestedWorkspaceType = try container.decodeIfPresent(String.self, forKey: .suggestedWorkspaceType)
-        compatibility = try container.decodeIfPresent(String.self, forKey: .compatibility)
+            ?? container.decodeIfPresent(String.self, forKey: .suggestedWorkspaceTypeSnake)
+        if let compatibilityText = try? container.decodeIfPresent(String.self, forKey: .compatibility) {
+            compatibility = compatibilityText
+        } else if let compatibilityValue = try? container.decodeIfPresent(JSONValue.self, forKey: .compatibility) {
+            compatibility = compatibilityValue.description
+        } else {
+            compatibility = nil
+        }
         lifecycleState = try container.decodeIfPresent(RuleLifecycleState.self, forKey: .lifecycleState)
+            ?? container.decodeIfPresent(RuleLifecycleState.self, forKey: .lifecycleStateSnake)
             ?? container.decodeIfPresent(RuleLifecycleState.self, forKey: .status)
-        creatorEmail = try container.decodeIfPresent(String.self, forKey: .creatorEmail)
-        changelog = try container.decodeIfPresent(String.self, forKey: .changelog)
+        creatorEmail = try container.decodeIfPresent(String.self, forKey: .ownerEmail)
+            ?? container.decodeIfPresent(String.self, forKey: .creatorEmail)
+        changelog = try container.decodeIfPresent(String.self, forKey: .releaseNotes)
+            ?? container.decodeIfPresent(String.self, forKey: .changelog)
         reviewNotes = try container.decodeIfPresent(String.self, forKey: .reviewNotes)
+            ?? container.decodeIfPresent(String.self, forKey: .reviewNotesSnake)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -412,13 +452,64 @@ struct RulePack: Identifiable, Decodable, Equatable {
         case description
         case includedRules = "included_rules"
         case rules
-        case suggestedWorkspaceType = "suggested_workspace_type"
+        case suggestedWorkspaceType
+        case suggestedWorkspaceTypeSnake = "suggested_workspace_type"
         case compatibility
-        case lifecycleState = "lifecycle_state"
+        case lifecycleState
+        case lifecycleStateSnake = "lifecycle_state"
         case status
+        case ownerEmail
         case creatorEmail = "creator_email"
         case changelog
-        case reviewNotes = "review_notes"
+        case releaseNotes
+        case reviewNotes
+        case reviewNotesSnake = "review_notes"
+    }
+}
+
+private enum JSONValue: Decodable, CustomStringConvertible {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let singleValue = try decoder.singleValueContainer()
+        if singleValue.decodeNil() {
+            self = .null
+        } else if let value = try? singleValue.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? singleValue.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? singleValue.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? singleValue.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else {
+            self = .array(try singleValue.decode([JSONValue].self))
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .string(let value):
+            return value
+        case .number(let value):
+            return value.rounded() == value ? String(Int(value)) : String(value)
+        case .bool(let value):
+            return value ? "true" : "false"
+        case .object(let values):
+            return values
+                .sorted { $0.key < $1.key }
+                .map { "\($0.key): \($0.value.description)" }
+                .joined(separator: ", ")
+        case .array(let values):
+            return values.map(\.description).joined(separator: ", ")
+        case .null:
+            return ""
+        }
     }
 }
 

@@ -98,7 +98,7 @@ final class SpellbookAPI {
     func createRuleDraft(spell: Spell, token: String) async throws -> Spell {
         let body = RuleDraftBody(spell: spell)
         let response: SpellEnvelope = try await send(
-            path: "/api/rules/drafts",
+            path: "/api/rules",
             method: "POST",
             body: body,
             token: token,
@@ -114,8 +114,8 @@ final class SpellbookAPI {
 
         let body = RuleDraftBody(spell: spell)
         let response: SpellEnvelope = try await send(
-            path: "/api/rules/\(uid.spellbookPathComponent)/versions/\(spell.normalizedVersion)/draft",
-            method: "PUT",
+            path: "/api/rules/\(uid.spellbookPathComponent)/draft",
+            method: "PATCH",
             body: body,
             token: token,
             operation: .saveRuleDraft
@@ -125,7 +125,7 @@ final class SpellbookAPI {
 
     func submitRuleDraft(uid: String, version: Int, token: String) async throws -> Spell {
         let response: SpellEnvelope = try await send(
-            path: "/api/rules/\(uid.spellbookPathComponent)/versions/\(max(version, 1))/submit",
+            path: "/api/rules/\(uid.spellbookPathComponent)/submit",
             method: "POST",
             body: Optional<String>.none,
             token: token,
@@ -135,14 +135,11 @@ final class SpellbookAPI {
     }
 
     func finishRule(uid: String, version: Int, token: String) async throws -> Spell {
-        let response: SpellEnvelope = try await send(
-            path: "/api/rules/\(uid.spellbookPathComponent)/versions/\(max(version, 1))/finish",
-            method: "POST",
-            body: Optional<String>.none,
-            token: token,
-            operation: .finishRule
-        )
-        return response.spell
+        let rule = try await publicRule(uid: uid, version: version, token: token)
+        guard rule.lifecycleState == .approved else {
+            throw SpellbookError.message("This rule is not approved yet.")
+        }
+        return rule
     }
 
     func publicPacks(token: String? = nil) async throws -> [RulePack] {
@@ -182,7 +179,7 @@ final class SpellbookAPI {
     }
 
     func dynamicRuleLink(uid: String) -> URL {
-        baseURL.spellbookAPIURL(path: "/open/rules/\(uid.spellbookPathComponent)")
+        baseURL.spellbookAPIURL(path: "/open/\(uid.spellbookPathComponent)")
     }
 
     private func send<ResponseBody: Decodable, RequestBody: Encodable>(
@@ -426,7 +423,7 @@ private struct RuleDraftBody: Encodable {
     var description: String
     var appliesWhen: String
     var file: String
-    var content: String
+    var body: String
 
     init(spell: Spell) {
         uid = spell.uid
@@ -434,25 +431,25 @@ private struct RuleDraftBody: Encodable {
         description = spell.description
         appliesWhen = spell.trigger
         file = RuleDraftBody.normalizedFilePath(for: spell)
-        content = spell.content ?? ""
+        body = spell.content ?? ""
     }
 
     private static func normalizedFilePath(for spell: Spell) -> String {
         let file = spell.file.trimmingCharacters(in: .whitespacesAndNewlines)
-        if file.hasPrefix("rules/"), !file.contains(".."), file.hasSuffix(".md") {
+        if file == "SPEC.md" || (!file.hasPrefix("/") && !file.contains("..") && file.hasSuffix(".md")) {
             return file
         }
 
-        return "rules/\(Spell.slug(for: spell.name)).md"
+        return "SPEC.md"
     }
 
     private enum CodingKeys: String, CodingKey {
         case uid
         case name
         case description
-        case appliesWhen = "applies_when"
+        case appliesWhen
         case file
-        case content
+        case body
     }
 }
 

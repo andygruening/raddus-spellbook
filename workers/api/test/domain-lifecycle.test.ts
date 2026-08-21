@@ -163,6 +163,30 @@ describe("ADR-0003 rule and pack backend domain", () => {
     expect(body.spells[0]?.uid).toBe(createdSpell.spell.uid);
     expect(body.spells[0]?.trigger).toBe("Use for old clients.");
   });
+
+  it("keeps new rule star and archive routes compatible with migrated spell behavior", async () => {
+    const env = await testEnv();
+    const ada = await token("ada@example.com");
+    const bob = await token("bob@example.com");
+    const admin = await token("admin@example.com");
+    await makeAdmin(env.DB, "admin@example.com");
+
+    const rule = await createApprovedRule(env, ada, admin, "Starred Rule");
+
+    const starred = await api(env, "POST", `/api/rules/${rule.uid}/star`, bob);
+    expect(starred.status).toBe(200);
+    expect(((await starred.json()) as { rule: { starCount: number; starredByMe: boolean } }).rule)
+      .toMatchObject({ starCount: 1, starredByMe: true });
+
+    const unstarred = await api(env, "DELETE", `/api/rules/${rule.uid}/star`, bob);
+    expect(unstarred.status).toBe(200);
+    expect(((await unstarred.json()) as { rule: { starCount: number; starredByMe: boolean } }).rule)
+      .toMatchObject({ starCount: 0, starredByMe: false });
+
+    const archived = await api(env, "DELETE", `/api/rules/${rule.uid}`, ada);
+    expect(archived.status).toBe(200);
+    expect(await expectRules(await api(env, "GET", "/api/rules/public"))).toEqual([]);
+  });
 });
 
 type RulePayload = {
