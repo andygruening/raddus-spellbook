@@ -4,7 +4,9 @@ import SwiftUI
 struct LocalSpellsView: View {
     @EnvironmentObject private var localStore: LocalSpellStore
     @EnvironmentObject private var sessionModel: SessionModel
+    @EnvironmentObject private var deepLinkModel: DeepLinkModel
     @State private var editingSpell: Spell?
+    @State private var viewingPublicRule: Spell?
     @State private var isShowingNewSpellForm = false
     @State private var errorMessage: String?
     @State private var publishedSpellsByUID: [String: Spell] = [:]
@@ -12,8 +14,8 @@ struct LocalSpellsView: View {
 
     var body: some View {
         PageContainer(
-            title: "Instructions",
-            subtitle: "Your global instruction library."
+            title: "Rules",
+            subtitle: "My Rules, drafts, review state, public rules, and installed local rules."
         ) {
             HStack(spacing: 8) {
                 Button {
@@ -22,7 +24,7 @@ struct LocalSpellsView: View {
                     Image(systemName: "plus")
                         .frame(width: 28, height: 28)
                 }
-                .help("Create and publish an instruction.")
+                .help("Create rule draft")
 
                 Button {
                     refresh()
@@ -34,7 +36,7 @@ struct LocalSpellsView: View {
             }
         } content: {
             if localStore.latestSpells.isEmpty {
-                EmptyState(title: "No installed spells", message: "Create a spell or install one from Published spells.")
+                EmptyState(title: "No installed rules", message: "Create a rule draft or install an approved public rule.")
             } else {
                 ScrollView {
                     LazyVStack(spacing: 10) {
@@ -67,15 +69,31 @@ struct LocalSpellsView: View {
             SpellFormView(
                 mode: .local(spell, editable: canEdit(spell)),
                 onSave: canEdit(spell) ? { updatedSpell in
-                    try await publishFromDetail(updatedSpell, replacing: spell)
+                    try await saveDraftFromDetail(updatedSpell, replacing: spell)
                 } : nil,
                 onPublish: canPublish(spell) ? { updatedSpell in
-                    try await publishFromDetail(updatedSpell, replacing: spell)
+                    try await submitForReview(updatedSpell, replacing: spell)
+                } : nil,
+                onFinish: canFinish(spell) ? { finishingSpell in
+                    try await finish(finishingSpell)
                 } : nil
+            )
+        }
+        .sheet(item: $viewingPublicRule) { spell in
+            SpellFormView(
+                mode: .published(spell, editable: canEdit(spell)),
+                onInstall: { installedSpell in
+                    try localStore.upsertLocal(installedSpell)
+                    viewingPublicRule = nil
+                }
             )
         }
         .onAppear {
             refresh()
+            openPendingPublicRuleIfAvailable()
+        }
+        .onChange(of: deepLinkModel.pendingPublishedSpellID) { _ in
+            openPendingPublicRuleIfAvailable()
         }
     }
 
@@ -105,13 +123,13 @@ struct LocalSpellsView: View {
         }
     }
 
-    private func publishFromDetail(_ spell: Spell, replacing originalSpell: Spell) async throws {
+    private func saveDraftFromDetail(_ spell: Spell, replacing originalSpell: Spell) async throws {
         guard let session = sessionModel.session else {
-            throw SpellbookError.message("Sign in to publish this spell.")
+            throw SpellbookError.message("Sign in to save this rule draft.")
         }
 
         do {
-            let remote = try await SpellbookAPI.shared.publish(spell: spell, token: session.token)
+            let remote = try await SpellbookAPI.shared.saveRuleDraft(spell: spell, token: session.token)
             try localStore.updateAfterPublish(localIdentifier: originalSpell.id, remoteSpell: remote, signedInEmail: session.email)
             if let uid = remote.uid {
                 publishedSpellsByUID[uid] = remote
@@ -129,11 +147,11 @@ struct LocalSpellsView: View {
 
     private func create(_ spell: Spell) async throws {
         guard let session = sessionModel.session else {
-            throw SpellbookError.message("Sign in to publish this instruction.")
+            throw SpellbookError.message("Sign in to create a rule draft.")
         }
 
         do {
-            let remote = try await SpellbookAPI.shared.publish(spell: spell, token: session.token)
+            let remote = try await SpellbookAPI.shared.createRuleDraft(spell: spell, token: session.token)
             try localStore.updateAfterPublish(localIdentifier: spell.id, remoteSpell: remote, signedInEmail: session.email)
             if let uid = remote.uid {
                 publishedSpellsByUID[uid] = remote
@@ -147,6 +165,61 @@ struct LocalSpellsView: View {
             errorMessage = error.localizedDescription
             throw error
         }
+    }
+
+    private func submitForReview(_ spell: Spell, replacing originalSpell: Spell) async throws {
+        guard let session = sessionModel.session else {
+            throw SpellbookError.message("Sign in to submit this rule.")
+        }
+        guard let uid = spell.uid else {
+            throw SpellbookError.message("Save this rule draft before submitting it.")
+        }
+
+        do {
+            let saved = try await SpellbookAPI.shared.saveRuleDraft(spell: spell, token: session.token)
+            let submitted = try await SpellbookAPI.shared.submitRuleDraft(uid: uid, version: saved.normalizedVersion, token: session.token)
+            try localStore.updateAfterPublish(localIdentifier: originalSpell.id, remoteSpell: submitted, signedInEmail: session.email)
+            if let uid = submitted.uid {
+                publishedSpellsByUID[uid] = submitted
+            }
+            errorMessage = nil
+            editingSpell = nil
+        } catch SpellbookError.expiredSession {
+            sessionModel.clearExpiredSession()
+            throw SpellbookError.expiredSession
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    private func finish(_ spell: Spell) async throws {
+        guard let session = sessionModel.session else {
+            throw SpellbookError.message("Sign in to finish this rule.")
+        }
+        guard let uid = spell.uid else {
+            throw SpellbookError.message("Only uid-backed rules can be finished.")
+        }
+
+        do {
+            let remote = try await SpellbookAPI.shared.finishRule(uid: uid, version: spell.normalizedVersion, token: session.token)
+            try localStore.upsertLocal(remote)
+            if let uid = remote.uid {
+                publishedSpellsByUID[uid] = remote
+            }
+            errorMessage = nil
+            editingSpell = nil
+        } catch SpellbookError.expiredSession {
+            sessionModel.clearExpiredSession()
+            throw SpellbookError.expiredSession
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    private func canFinish(_ spell: Spell) -> Bool {
+        spell.lifecycleState == .approved
     }
 
     private func update(_ spell: Spell) throws {
@@ -249,6 +322,32 @@ struct LocalSpellsView: View {
             }
         }
     }
+
+    private func openPendingPublicRuleIfAvailable() {
+        guard let uid = deepLinkModel.pendingPublishedSpellID else {
+            return
+        }
+
+        Task {
+            do {
+                let rule = try await SpellbookAPI.shared.publicRule(uid: uid, token: sessionModel.session?.token)
+                await MainActor.run {
+                    viewingPublicRule = rule
+                    deepLinkModel.pendingPublishedSpellID = nil
+                }
+            } catch SpellbookError.expiredSession {
+                await MainActor.run {
+                    sessionModel.clearExpiredSession()
+                    deepLinkModel.pendingPublishedSpellID = nil
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    deepLinkModel.pendingPublishedSpellID = nil
+                }
+            }
+        }
+    }
 }
 
 enum InstructionDetailActionStyle {
@@ -330,7 +429,7 @@ struct InstructionDetailView: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(isRunningAction)
-                    .help("Edit instruction")
+                    .help("Edit rule")
                 }
 
                 Button {
@@ -345,7 +444,7 @@ struct InstructionDetailView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Trigger")
+                Text("Applies when")
                     .font(.callout.weight(.medium))
 
                 Text(spell.trigger.isEmpty ? "Not set" : spell.trigger)
@@ -357,8 +456,25 @@ struct InstructionDetailView: View {
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.22), lineWidth: 1))
             }
 
+            if let lifecycleState = spell.lifecycleState {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Review state")
+                        .font(.callout.weight(.medium))
+
+                    HStack(spacing: 8) {
+                        SpellPill(text: lifecycleState.label, tint: lifecycleState == .approved ? .green : lifecycleState == .needsChanges ? .orange : .blue)
+                        if let reviewNotes = spell.reviewNotes?.trimmingCharacters(in: .whitespacesAndNewlines), !reviewNotes.isEmpty {
+                            Text(reviewNotes)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
             VStack(alignment: .leading, spacing: 6) {
-                Text("SPEC.md")
+                Text("Advanced Markdown")
                     .font(.callout.weight(.medium))
 
                 ScrollView {
@@ -449,7 +565,7 @@ enum SpellFormMode {
     var title: String {
         switch self {
         case .create:
-            return "New Instruction"
+            return "New Rule"
         case .local(let spell, _), .published(let spell, _):
             return spell.name
         }
@@ -458,7 +574,7 @@ enum SpellFormMode {
     var subtitle: String {
         switch self {
         case .create:
-            return "Add a local instruction and paste its markdown."
+            return "Create a private backend-owned rule draft."
         case .local(let spell, _), .published(let spell, _):
             return spell.description
         }
@@ -467,11 +583,11 @@ enum SpellFormMode {
     var buttonTitle: String {
         switch self {
         case .create:
-            return "Create Instruction"
+            return "Create Rule"
         case .local:
-            return "Save Instruction"
+            return "Save Rule"
         case .published:
-            return "Update Instruction"
+            return "Save Rule"
         }
     }
 
@@ -496,8 +612,10 @@ enum SpellFormMode {
 
 private enum InstructionFlowStep: Int, CaseIterable, Identifiable {
     case basics
-    case trigger
-    case spec
+    case behavior
+    case boundary
+    case examples
+    case preview
 
     var id: Int { rawValue }
 
@@ -505,10 +623,14 @@ private enum InstructionFlowStep: Int, CaseIterable, Identifiable {
         switch self {
         case .basics:
             return "Basics"
-        case .trigger:
-            return "Trigger"
-        case .spec:
-            return "SPEC.md"
+        case .behavior:
+            return "Behavior"
+        case .boundary:
+            return "Boundary"
+        case .examples:
+            return "Examples"
+        case .preview:
+            return "Preview"
         }
     }
 
@@ -516,9 +638,13 @@ private enum InstructionFlowStep: Int, CaseIterable, Identifiable {
         switch self {
         case .basics:
             return "text.cursor"
-        case .trigger:
-            return "bolt"
-        case .spec:
+        case .behavior:
+            return "list.bullet.rectangle"
+        case .boundary:
+            return "hand.raised"
+        case .examples:
+            return "quote.bubble"
+        case .preview:
             return "doc.plaintext"
         }
     }
@@ -532,9 +658,14 @@ private struct InstructionFlowView: View {
 
     @State private var currentStep: InstructionFlowStep = .basics
     @State private var name = ""
-    @State private var spellDescription = ""
-    @State private var trigger = ""
+    @State private var purpose = ""
+    @State private var appliesWhen = ""
+    @State private var desiredBehavior = ""
+    @State private var avoidedBehavior = ""
+    @State private var permissionBoundary = ""
+    @State private var examples = ""
     @State private var content = ""
+    @State private var isAdvancedMarkdown = false
     @State private var validationMessage: String?
     @State private var isSaving = false
 
@@ -546,27 +677,54 @@ private struct InstructionFlowView: View {
         self.onSave = onSave
         let spell = mode.existingSpell
         _name = State(initialValue: spell?.name ?? "")
-        _spellDescription = State(initialValue: spell?.description ?? "")
-        _trigger = State(initialValue: spell?.trigger ?? "")
+        _purpose = State(initialValue: spell?.description ?? "")
+        _appliesWhen = State(initialValue: spell?.trigger ?? "")
+        _desiredBehavior = State(initialValue: Self.section("Desired Behavior", in: spell?.content ?? ""))
+        _avoidedBehavior = State(initialValue: Self.section("Avoided Behavior", in: spell?.content ?? ""))
+        _permissionBoundary = State(initialValue: Self.section("Permission Boundary", in: spell?.content ?? ""))
+        _examples = State(initialValue: Self.section("Examples", in: spell?.content ?? ""))
         _content = State(initialValue: spell?.content ?? "")
     }
 
     private var canCreate: Bool {
         !trimmed(name).isEmpty
-            && !trimmed(spellDescription).isEmpty
-            && !trimmed(trigger).isEmpty
-            && !trimmed(content).isEmpty
+            && !trimmed(purpose).isEmpty
+            && !trimmed(appliesWhen).isEmpty
+            && !trimmed(desiredBehavior).isEmpty
+            && !trimmed(avoidedBehavior).isEmpty
+            && !trimmed(permissionBoundary).isEmpty
+            && !generatedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var canMoveForward: Bool {
         switch currentStep {
         case .basics:
-            return !trimmed(name).isEmpty && !trimmed(spellDescription).isEmpty
-        case .trigger:
-            return !trimmed(trigger).isEmpty
-        case .spec:
-            return !trimmed(content).isEmpty
+            return !trimmed(name).isEmpty && !trimmed(purpose).isEmpty && !trimmed(appliesWhen).isEmpty
+        case .behavior:
+            return !trimmed(desiredBehavior).isEmpty && !trimmed(avoidedBehavior).isEmpty
+        case .boundary:
+            return !trimmed(permissionBoundary).isEmpty
+        case .examples:
+            return true
+        case .preview:
+            return !generatedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+    }
+
+    private var generatedContent: String {
+        if isAdvancedMarkdown {
+            return trimmed(content)
+        }
+
+        return Spell.generatedMarkdown(
+            name: trimmed(name),
+            purpose: trimmed(purpose),
+            appliesWhen: trimmed(appliesWhen),
+            desiredBehavior: trimmed(desiredBehavior),
+            avoidedBehavior: trimmed(avoidedBehavior),
+            permissionBoundary: trimmed(permissionBoundary),
+            examples: trimmed(examples)
+        )
     }
 
     private var hasPreviousStep: Bool {
@@ -585,7 +743,7 @@ private struct InstructionFlowView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(mode.existingSpell == nil ? "New Instruction" : "Edit Instruction")
+                    Text(mode.existingSpell == nil ? "New Rule" : "Edit Rule")
                         .font(.title2.bold())
 
                     Text(mode.subtitle)
@@ -708,20 +866,42 @@ private struct InstructionFlowView: View {
         case .basics:
             VStack(alignment: .leading, spacing: 14) {
                 LabeledContent("Name") {
-                    TextField("Instruction name", text: $name)
+                    TextField("Rule name", text: $name)
                         .textFieldStyle(.roundedBorder)
                 }
 
-                LabeledContent("Description") {
-                    TextField("Short description", text: $spellDescription)
+                LabeledContent("Purpose") {
+                    TextField("What should this rule help with?", text: $purpose)
                         .textFieldStyle(.roundedBorder)
                 }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Applies when")
+                        .font(.callout.weight(.medium))
+                    TextEditor(text: $appliesWhen)
+                        .font(.body)
+                        .frame(height: 92)
+                        .scrollContentBackground(.hidden)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.22), lineWidth: 1))
+                }
             }
-        case .trigger:
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Trigger")
+        case .behavior:
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Desired Behavior")
                     .font(.callout.weight(.medium))
-                TextEditor(text: $trigger)
+                TextEditor(text: $desiredBehavior)
+                    .font(.body)
+                    .frame(height: 110)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.22), lineWidth: 1))
+
+                Text("Avoided Behavior")
+                    .font(.callout.weight(.medium))
+                TextEditor(text: $avoidedBehavior)
                     .font(.body)
                     .frame(height: 110)
                     .scrollContentBackground(.hidden)
@@ -729,11 +909,38 @@ private struct InstructionFlowView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.22), lineWidth: 1))
             }
-        case .spec:
+        case .boundary:
             VStack(alignment: .leading, spacing: 6) {
-                Text("SPEC.md")
+                Text("Permission Boundary")
                     .font(.callout.weight(.medium))
-                TextEditor(text: $content)
+                TextEditor(text: $permissionBoundary)
+                    .font(.body)
+                    .frame(height: 190)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.22), lineWidth: 1))
+            }
+        case .examples:
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Examples")
+                    .font(.callout.weight(.medium))
+                TextEditor(text: $examples)
+                    .font(.body)
+                    .frame(height: 220)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.22), lineWidth: 1))
+            }
+        case .preview:
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Advanced Markdown", isOn: $isAdvancedMarkdown)
+                    .toggleStyle(.checkbox)
+
+                Text(isAdvancedMarkdown ? "Advanced Markdown" : "Preview")
+                    .font(.callout.weight(.medium))
+                TextEditor(text: isAdvancedMarkdown ? $content : .constant(generatedContent))
                     .font(.system(.body, design: .monospaced))
                     .frame(height: 260)
                     .scrollContentBackground(.hidden)
@@ -791,7 +998,7 @@ private struct InstructionFlowView: View {
 
     private func draftSpell() -> Spell? {
         guard canCreate else {
-            validationMessage = "Fill in name, description, trigger, and markdown content."
+            validationMessage = "Fill in Purpose, Applies when, Desired Behavior, Avoided Behavior, Permission Boundary, and Preview."
             return nil
         }
 
@@ -800,20 +1007,48 @@ private struct InstructionFlowView: View {
             uid: existing?.uid,
             localID: nil,
             name: trimmed(name),
-            description: trimmed(spellDescription),
-            trigger: trimmed(trigger),
+            description: trimmed(purpose),
+            trigger: trimmed(appliesWhen),
             file: existing?.file ?? "",
-            content: trimmed(content),
+            content: generatedContent,
             version: existing?.version ?? 1,
             ownerEmail: existing?.ownerEmail,
             publishedAt: existing?.publishedAt,
             starCount: existing?.starCount ?? 0,
-            starredByMe: existing?.starredByMe ?? false
+            starredByMe: existing?.starredByMe ?? false,
+            lifecycleState: existing?.lifecycleState ?? .draft,
+            reviewNotes: existing?.reviewNotes
         )
     }
 
     private func trimmed(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func section(_ heading: String, in markdown: String) -> String {
+        var isCollecting = false
+        var lines: [String] = []
+
+        for line in markdown.components(separatedBy: .newlines) {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            if trimmedLine.hasPrefix("#") {
+                let headingText = String(trimmedLine.drop(while: { $0 == "#" }))
+                    .trimmingCharacters(in: .whitespaces)
+                if isCollecting {
+                    break
+                }
+                if headingText.caseInsensitiveCompare(heading) == .orderedSame {
+                    isCollecting = true
+                }
+                continue
+            }
+
+            if isCollecting {
+                lines.append(line)
+            }
+        }
+
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -823,6 +1058,7 @@ struct SpellFormView: View {
     var mode: SpellFormMode
     var onSave: ((Spell) async throws -> Void)?
     var onPublish: ((Spell) async throws -> Void)?
+    var onFinish: ((Spell) async throws -> Void)?
     var onInstall: ((Spell) throws -> Void)?
     var onDelete: ((Spell) async throws -> Void)?
 
@@ -832,12 +1068,14 @@ struct SpellFormView: View {
         mode: SpellFormMode,
         onSave: ((Spell) async throws -> Void)? = nil,
         onPublish: ((Spell) async throws -> Void)? = nil,
+        onFinish: ((Spell) async throws -> Void)? = nil,
         onInstall: ((Spell) throws -> Void)? = nil,
         onDelete: ((Spell) async throws -> Void)? = nil
     ) {
         self.mode = mode
         self.onSave = onSave
         self.onPublish = onPublish
+        self.onFinish = onFinish
         self.onInstall = onInstall
         self.onDelete = onDelete
     }
@@ -875,7 +1113,7 @@ struct SpellFormView: View {
 
         if let onInstall {
             actions.append(InstructionDetailAction(
-                title: "Install",
+                title: "Install Locally",
                 systemImage: "square.and.arrow.down",
                 role: nil,
                 style: .prominent,
@@ -887,11 +1125,23 @@ struct SpellFormView: View {
 
         if let onPublish {
             actions.append(InstructionDetailAction(
-                title: spell.uid == nil ? "Publish" : "Update Published",
+                title: "Submit for Review",
                 systemImage: "icloud.and.arrow.up",
                 role: nil,
                 action: { publishingSpell in
                     try await onPublish(publishingSpell)
+                }
+            ))
+        }
+
+        if let onFinish {
+            actions.append(InstructionDetailAction(
+                title: "Finish",
+                systemImage: "checkmark.seal",
+                role: nil,
+                style: .prominent,
+                action: { finishingSpell in
+                    try await onFinish(finishingSpell)
                 }
             ))
         }
@@ -935,7 +1185,407 @@ struct SpellShareButton: View {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
             .disabled(true)
-            .help("Publish this spell before sharing")
+            .help("Submit and finish this rule before sharing")
+        }
+    }
+}
+
+struct PacksView: View {
+    @EnvironmentObject private var localStore: LocalSpellStore
+    @EnvironmentObject private var sessionModel: SessionModel
+    @State private var packs: [RulePack] = []
+    @State private var expandedPackIDs: Set<String> = []
+    @State private var installingPack: RulePack?
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        PageContainer(title: "Packs", subtitle: "Browse approved public packs and install their pinned rule versions into a workspace.") {
+            Button {
+                load()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 28, height: 28)
+            }
+            .disabled(isLoading)
+            .help("Refresh")
+        } content: {
+            if isLoading && packs.isEmpty {
+                EmptyState(title: "Loading", message: "Fetching packs.")
+            } else if packs.isEmpty {
+                EmptyState(title: "No packs", message: "Approved public packs will appear here.")
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(packs) { pack in
+                            packTile(pack)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .task {
+            if packs.isEmpty {
+                await loadAsync()
+            }
+        }
+        .sheet(item: $installingPack) { pack in
+            PackInstallPreviewView(pack: pack)
+                .environmentObject(localStore)
+                .environmentObject(sessionModel)
+        }
+        .spellbookErrorAlert(message: $errorMessage)
+    }
+
+    private func packTile(_ pack: RulePack) -> some View {
+        let isExpanded = expandedPackIDs.contains(pack.id)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Button {
+                    toggle(pack)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 14)
+
+                        Image(systemName: "shippingbox")
+                            .foregroundStyle(Color.accentColor)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(pack.name)
+                                    .font(.callout.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                SpellPill(text: "v\(pack.version)", tint: .gray)
+                            }
+                            Text(pack.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+
+                        Spacer(minLength: 12)
+
+                        Text("\(pack.includedRules.count)")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 24)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    installingPack = pack
+                } label: {
+                    Label("Install", systemImage: "square.and.arrow.down")
+                        .labelStyle(.iconOnly)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(pack.includedRules.isEmpty || localStore.targets.isEmpty)
+                .help(localStore.targets.isEmpty ? "Add a workspace first" : "Install pack")
+            }
+            .padding(12)
+
+            if isExpanded {
+                Divider()
+
+                VStack(spacing: 0) {
+                    ForEach(Array(pack.includedRules.enumerated()), id: \.element.id) { index, ruleRef in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(ruleRef.name ?? ruleRef.uid)
+                                    .font(.callout.weight(.medium))
+                                Text(ruleRef.description ?? "\(ruleRef.uid)@\(ruleRef.version)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            SpellPill(text: "v\(ruleRef.version)", tint: .gray)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+
+                        if index < pack.includedRules.count - 1 {
+                            Divider().padding(.leading, 14)
+                        }
+                    }
+                }
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.18), lineWidth: 1))
+    }
+
+    private func toggle(_ pack: RulePack) {
+        if expandedPackIDs.contains(pack.id) {
+            expandedPackIDs.remove(pack.id)
+        } else {
+            expandedPackIDs.insert(pack.id)
+        }
+    }
+
+    private func load() {
+        Task {
+            await loadAsync()
+        }
+    }
+
+    private func loadAsync() async {
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            packs = try await SpellbookAPI.shared.publicPacks(token: sessionModel.session?.token)
+            isLoading = false
+        } catch SpellbookError.expiredSession {
+            isLoading = false
+            sessionModel.clearExpiredSession()
+        } catch {
+            errorMessage = error.localizedDescription
+            isLoading = false
+        }
+    }
+}
+
+private enum PackRuleInstallState: Equatable {
+    case exact
+    case different(Int)
+    case missing
+
+    var label: String {
+        switch self {
+        case .exact:
+            return "Exact version already installed"
+        case .different(let version):
+            return "Different version installed: v\(version)"
+        case .missing:
+            return "Missing"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .exact:
+            return .green
+        case .different:
+            return .orange
+        case .missing:
+            return .blue
+        }
+    }
+}
+
+struct PackInstallPreviewView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var localStore: LocalSpellStore
+    @EnvironmentObject private var sessionModel: SessionModel
+
+    var pack: RulePack
+
+    @State private var selectedTargetID: String?
+    @State private var resolvedRules: [String: Spell] = [:]
+    @State private var isLoadingRules = false
+    @State private var isInstalling = false
+    @State private var statusMessage: String?
+    @State private var errorMessage: String?
+
+    private var selectedTarget: SpellbookTarget? {
+        localStore.targets.first { $0.id == selectedTargetID } ?? localStore.targets.first
+    }
+
+    private var canInstall: Bool {
+        selectedTarget != nil
+            && !isLoadingRules
+            && !isInstalling
+            && pack.includedRules.allSatisfy { resolvedRules[$0.id] != nil }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Install Pack")
+                        .font(.title2.bold())
+                    Text(pack.name)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.cancelAction)
+                .disabled(isInstalling)
+                .help("Close")
+            }
+
+            Picker("Workspace", selection: Binding(
+                get: { selectedTargetID ?? localStore.targets.first?.id ?? "" },
+                set: { selectedTargetID = $0 }
+            )) {
+                ForEach(localStore.targets) { target in
+                    Text(target.name).tag(target.id)
+                }
+            }
+            .disabled(localStore.targets.isEmpty || isInstalling)
+
+            if localStore.targets.isEmpty {
+                EmptyState(title: "No workspaces", message: "Add a workspace before installing a pack.")
+                    .frame(minHeight: 180)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(pack.includedRules) { ruleRef in
+                            previewRow(ruleRef)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(minHeight: 320)
+            }
+
+            if let statusMessage {
+                Text(statusMessage)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                .disabled(isInstalling)
+
+                Button {
+                    install()
+                } label: {
+                    Label(isInstalling ? "Installing" : "Install Pack", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canInstall)
+            }
+        }
+        .padding(24)
+        .frame(width: 680, height: 620)
+        .onAppear {
+            selectedTargetID = selectedTargetID ?? localStore.targets.first?.id
+            loadRules()
+        }
+        .spellbookErrorAlert(message: $errorMessage)
+    }
+
+    private func previewRow(_ ruleRef: PackRuleVersionRef) -> some View {
+        let rule = resolvedRules[ruleRef.id]
+        let state = installState(for: ruleRef)
+
+        return HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(rule?.name ?? ruleRef.name ?? ruleRef.uid)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    SpellPill(text: "v\(ruleRef.version)", tint: .gray)
+                }
+
+                Text(rule?.description ?? ruleRef.description ?? ruleRef.id)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            SpellPill(text: state.label, tint: state.tint)
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.16), lineWidth: 1))
+    }
+
+    private func installState(for ruleRef: PackRuleVersionRef) -> PackRuleInstallState {
+        guard let selectedTarget,
+              let installedVersion = localStore.installedVersion(uid: ruleRef.uid, in: selectedTarget) else {
+            return .missing
+        }
+
+        return installedVersion == ruleRef.version ? .exact : .different(installedVersion)
+    }
+
+    private func loadRules() {
+        guard !pack.includedRules.isEmpty else {
+            return
+        }
+
+        isLoadingRules = true
+        errorMessage = nil
+
+        Task {
+            do {
+                var loaded: [String: Spell] = [:]
+                for ruleRef in pack.includedRules {
+                    let rule = try await SpellbookAPI.shared.publicRule(
+                        uid: ruleRef.uid,
+                        version: ruleRef.version,
+                        token: sessionModel.session?.token
+                    )
+                    loaded[ruleRef.id] = rule
+                }
+
+                await MainActor.run {
+                    resolvedRules = loaded
+                    isLoadingRules = false
+                }
+            } catch SpellbookError.expiredSession {
+                await MainActor.run {
+                    sessionModel.clearExpiredSession()
+                    isLoadingRules = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isLoadingRules = false
+                }
+            }
+        }
+    }
+
+    private func install() {
+        guard let selectedTarget else {
+            errorMessage = "Choose a workspace."
+            return
+        }
+
+        let rules = pack.includedRules.compactMap { resolvedRules[$0.id] }
+        guard rules.count == pack.includedRules.count else {
+            errorMessage = "Spellbook could not load every pinned rule version."
+            return
+        }
+
+        isInstalling = true
+        do {
+            try localStore.installPackRules(rules, into: selectedTarget)
+            statusMessage = localStore.statusMessage
+            errorMessage = nil
+            isInstalling = false
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+            isInstalling = false
         }
     }
 }
@@ -966,7 +1616,7 @@ struct PublishedSpellsView: View {
     }
 
     var body: some View {
-        PageContainer(title: "Published spells", subtitle: "Public Spellbook registry") {
+        PageContainer(title: "Public rules", subtitle: "Approved Spellbook rules") {
             HStack(spacing: 12) {
                 TextField("Search", text: $searchText)
                     .textFieldStyle(.roundedBorder)
@@ -985,9 +1635,9 @@ struct PublishedSpellsView: View {
             }
 
             if isLoading && spells.isEmpty {
-                EmptyState(title: "Loading", message: "Fetching published spells.")
+                EmptyState(title: "Loading", message: "Fetching public rules.")
             } else if filteredSpells.isEmpty {
-                EmptyState(title: "No published spells", message: "Published spells will appear here.")
+                EmptyState(title: "No public rules", message: "Approved public rules will appear here.")
             } else {
                 ScrollView {
                     LazyVStack(spacing: 10) {
@@ -1218,8 +1868,8 @@ struct ProjectsView: View {
 
     var body: some View {
         PageContainer(
-            title: "Projects",
-            subtitle: "Attach installed instructions to target directories."
+            title: "Workspaces",
+            subtitle: "Attach installed rules to workspace directories."
         ) {
             HStack(spacing: 8) {
                 Button {
@@ -1229,7 +1879,7 @@ struct ProjectsView: View {
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.borderedProminent)
-                .help("Add project")
+                .help("Add workspace")
 
                 Button {
                     refresh()
@@ -1241,7 +1891,7 @@ struct ProjectsView: View {
             }
         } content: {
             if localStore.targets.isEmpty {
-                EmptyState(title: "No projects", message: "Add a project directory before attaching instructions.")
+                EmptyState(title: "No workspaces", message: "Add a workspace directory before attaching rules.")
             } else {
                 ScrollView {
                     LazyVStack(spacing: 10) {
@@ -1292,7 +1942,7 @@ struct ProjectsView: View {
         .onReceive(localStore.$targets) { _ in
             pruneExpandedTargetIDs()
         }
-        .alert("Remove instruction from project?", isPresented: Binding(
+        .alert("Remove rule from workspace?", isPresented: Binding(
             get: { pendingProjectInstructionRemoval != nil },
             set: { isPresented in
                 if !isPresented {
@@ -1355,13 +2005,13 @@ struct ProjectsView: View {
                     Button {
                         editingTarget = target
                     } label: {
-                        Label("Edit Project", systemImage: "pencil")
+                        Label("Edit Workspace", systemImage: "pencil")
                     }
 
                     Button {
                         reviewingTarget = target
                     } label: {
-                        Label("Review Instruction", systemImage: "doc.text.magnifyingglass")
+                        Label("Review Rules Block", systemImage: "doc.text.magnifyingglass")
                     }
 
                     Divider()
@@ -1369,14 +2019,14 @@ struct ProjectsView: View {
                     Button(role: .destructive) {
                         removeTarget(target)
                     } label: {
-                        Label("Remove Project", systemImage: "trash")
+                        Label("Remove Workspace", systemImage: "trash")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .frame(width: 28, height: 28)
                 }
                 .menuStyle(.borderlessButton)
-                .help("Project actions")
+                .help("Workspace actions")
 
                 Button {
                     targetForAddingInstruction = target
@@ -1385,7 +2035,7 @@ struct ProjectsView: View {
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.borderedProminent)
-                .help("Add instruction to project")
+                .help("Add rule to workspace")
             }
             .padding(12)
 
@@ -1393,7 +2043,7 @@ struct ProjectsView: View {
                 Divider()
 
                 if installedSpells.isEmpty {
-                    EmptyState(title: "No project instructions", message: "Use the plus button to attach an installed instruction.")
+                    EmptyState(title: "No workspace rules", message: "Use the plus button to attach an installed rule.")
                         .frame(minHeight: 120)
                 } else {
                     VStack(spacing: 0) {
@@ -1471,7 +2121,7 @@ struct ProjectsView: View {
                     .frame(width: 24, height: 24)
             }
             .buttonStyle(.borderless)
-            .help("Remove from project")
+            .help("Remove from workspace")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1541,7 +2191,7 @@ struct ProjectsView: View {
                     sessionModel.clearExpiredSession()
                 }
             } catch {
-                // Project-installed instructions remain usable if the remote catalog cannot refresh.
+                // Workspace-installed rules remain usable if the remote catalog cannot refresh.
             }
         }
     }
@@ -1592,7 +2242,7 @@ struct ProjectsView: View {
         }
 
         guard let uid = spell.uid else {
-            throw SpellbookError.message("That instruction is missing a uid.")
+            throw SpellbookError.message("That rule is missing a uid.")
         }
 
         return try await SpellbookAPI.shared.publicSpell(
@@ -1714,17 +2364,17 @@ struct ProjectInstructionPickerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Add Instruction")
+                Text("Add Rule")
                     .font(.title2.bold())
                 Text(target.name)
                     .foregroundStyle(.secondary)
             }
 
-            TextField("Search installed instructions", text: $searchText)
+            TextField("Search installed rules", text: $searchText)
                 .textFieldStyle(.roundedBorder)
 
             if filteredSpells.isEmpty {
-                EmptyState(title: "No installed instructions", message: "Create or install instructions before adding them to a project.")
+                EmptyState(title: "No installed rules", message: "Create or install rules before adding them to a workspace.")
                     .frame(minHeight: 240)
             } else {
                 ScrollView {
@@ -1789,7 +2439,7 @@ struct ProjectInstructionPickerView: View {
             }
             .disabled(isInstalled)
             .buttonStyle(.borderless)
-            .help(isInstalled ? "Already added" : "Add to project")
+            .help(isInstalled ? "Already added" : "Add to workspace")
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -1853,7 +2503,7 @@ struct SettingsView: View {
 
     private var systemStoreSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("System Store")
+            Text("Local Rule Store")
                 .font(.headline)
 
             HStack(alignment: .center, spacing: 12) {
@@ -1990,18 +2640,18 @@ enum TargetFormMode {
     var title: String {
         switch self {
         case .add:
-            return "Add Project"
+            return "Add Workspace"
         case .edit:
-            return "Edit Project"
+            return "Edit Workspace"
         }
     }
 
     var buttonTitle: String {
         switch self {
         case .add:
-            return "Add Project"
+            return "Add Workspace"
         case .edit:
-            return "Save Project"
+            return "Save Workspace"
         }
     }
 
@@ -2040,7 +2690,7 @@ struct TargetFormView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(mode.title)
                     .font(.title2.bold())
-                Text("Choose the directory and harness files Spellbook should manage.")
+                Text("Choose the workspace directory and harness files Spellbook should manage.")
                     .foregroundStyle(.secondary)
             }
 
@@ -2077,7 +2727,7 @@ struct TargetFormView: View {
                 }
 
                 if let directoryURL {
-                    LabeledContent("Project name") {
+                    LabeledContent("Workspace name") {
                         Text(SpellbookTarget.displayName(for: directoryURL.path(percentEncoded: false)))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2108,7 +2758,7 @@ struct TargetFormView: View {
 
     private func chooseDirectory() {
         let panel = NSOpenPanel()
-        panel.title = "Choose target directory"
+        panel.title = "Choose workspace directory"
         panel.prompt = "Choose"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -2126,7 +2776,7 @@ struct TargetFormView: View {
 
     private func addTarget() {
         guard let directoryURL else {
-            errorMessage = "Choose a target directory."
+            errorMessage = "Choose a workspace directory."
             return
         }
 
@@ -2185,7 +2835,7 @@ struct TargetInstructionReviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Review Instruction")
+                Text("Review Rules Block")
                     .font(.title2.bold())
                 Text(target.name)
                     .foregroundStyle(.secondary)
@@ -2232,12 +2882,12 @@ struct TargetInstructionReviewView: View {
                         alignment: .leading,
                         spacing: 10
                     ) {
-                        PreviewValue(label: "Target", value: preview.targetInstructionURL.path(percentEncoded: false))
+                        PreviewValue(label: "Workspace file", value: preview.targetInstructionURL.path(percentEncoded: false))
                         PreviewValue(label: "Agent", value: preview.agent)
-                        PreviewValue(label: "Instruction", value: preview.isInstalled ? "Installed" : "Not installed")
+                        PreviewValue(label: "Rules block", value: preview.isInstalled ? "Installed" : "Not installed")
                         PreviewValue(label: "Block", value: preview.action.rawValue)
                         PreviewValue(label: "Managed entries", value: "\(preview.managedInstructionCount)")
-                        PreviewValue(label: "~/.spellbook/instructions", value: preview.instructionStoreExists ? "Exists" : "Will create")
+                        PreviewValue(label: "~/.spellbook/rules", value: preview.instructionStoreExists ? "Exists" : "Will create")
                         PreviewValue(label: "~/.spellbook/registry/targets.json", value: preview.targetsExists ? "Exists" : "Will create")
                     }
 
@@ -2253,7 +2903,7 @@ struct TargetInstructionReviewView: View {
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.18), lineWidth: 1))
                 }
             } else {
-                EmptyState(title: "No preview", message: "Review the instruction block before applying it.")
+                EmptyState(title: "No preview", message: "Review the rules block before applying it.")
             }
         }
         .padding(24)
@@ -2267,7 +2917,7 @@ struct TargetInstructionReviewView: View {
     private func reviewInstruction() {
         do {
             guard let directoryURL = localStore.directoryURL(for: target) else {
-                throw SpellbookError.message("Choose the target directory again.")
+                throw SpellbookError.message("Choose the workspace directory again.")
             }
 
             preview = try InstructionManager.preview(
@@ -2285,7 +2935,7 @@ struct TargetInstructionReviewView: View {
     private func applyInstruction() {
         do {
             guard let directoryURL = localStore.directoryURL(for: target) else {
-                throw SpellbookError.message("Choose the target directory again.")
+                throw SpellbookError.message("Choose the workspace directory again.")
             }
 
             try InstructionManager.apply(
@@ -2296,7 +2946,7 @@ struct TargetInstructionReviewView: View {
             try localStore.refresh()
             errorMessage = nil
             reviewInstruction()
-            statusMessage = "Applied Spellbook managed block."
+            statusMessage = "Applied Spellbook rules block."
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -2305,14 +2955,14 @@ struct TargetInstructionReviewView: View {
     private func removeInstruction() {
         do {
             guard let directoryURL = localStore.directoryURL(for: target) else {
-                throw SpellbookError.message("Choose the target directory again.")
+                throw SpellbookError.message("Choose the workspace directory again.")
             }
 
             try InstructionManager.removeManagedBlocks(from: directoryURL, harnesses: target.harnesses)
             try localStore.refresh()
             errorMessage = nil
             reviewInstruction()
-            statusMessage = "Removed Spellbook instruction."
+            statusMessage = "Removed Spellbook rules block."
         } catch {
             errorMessage = error.localizedDescription
         }

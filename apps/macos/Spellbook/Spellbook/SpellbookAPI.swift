@@ -32,64 +32,130 @@ final class SpellbookAPI {
     }
 
     func publicSpells(token: String? = nil) async throws -> [Spell] {
+        try await publicRules(token: token)
+    }
+
+    func publicRules(token: String? = nil) async throws -> [Spell] {
         let response: SpellsResponse = try await send(
-            path: "/api/spells/public?limit=100",
+            path: "/api/rules/public?limit=100",
             method: "GET",
             body: Optional<String>.none,
             token: token,
-            operation: .loadPublishedSpells
+            operation: .loadPublicRules
         )
         return response.spells
     }
 
     func publicSpell(uid: String, token: String? = nil) async throws -> Spell {
+        try await publicRule(uid: uid, token: token)
+    }
+
+    func publicRule(uid: String, token: String? = nil) async throws -> Spell {
         let response: SpellEnvelope = try await send(
-            path: "/api/spells/\(uid)",
+            path: "/api/rules/\(uid.spellbookPathComponent)",
             method: "GET",
             body: Optional<String>.none,
             token: token,
-            operation: .loadPublishedSpells
+            operation: .loadPublicRules
         )
         return response.spell
     }
 
     func publicSpell(uid: String, version: Int, token: String? = nil) async throws -> Spell {
+        try await publicRule(uid: uid, version: version, token: token)
+    }
+
+    func publicRule(uid: String, version: Int, token: String? = nil) async throws -> Spell {
         let response: SpellEnvelope = try await send(
-            path: "/api/spells/\(uid)/versions/\(max(version, 1))",
+            path: "/api/rules/\(uid.spellbookPathComponent)/versions/\(max(version, 1))",
             method: "GET",
             body: Optional<String>.none,
             token: token,
-            operation: .loadPublishedSpells
+            operation: .loadPublicRules
         )
         return response.spell
     }
 
     func mySpells(token: String) async throws -> [Spell] {
+        try await myRules(token: token)
+    }
+
+    func myRules(token: String) async throws -> [Spell] {
         let response: SpellsResponse = try await send(
-            path: "/api/spells/mine",
+            path: "/api/rules/mine",
             method: "GET",
             body: Optional<String>.none,
             token: token,
-            operation: .loadMySpells
+            operation: .loadMyRules
         )
         return response.spells
     }
 
     func publish(spell: Spell, token: String) async throws -> Spell {
-        let body = PublishSpellBody(spell: spell)
+        try await saveRuleDraft(spell: spell, token: token)
+    }
+
+    func createRuleDraft(spell: Spell, token: String) async throws -> Spell {
+        let body = RuleDraftBody(spell: spell)
         let response: SpellEnvelope = try await send(
-            path: "/api/spells",
+            path: "/api/rules",
             method: "POST",
             body: body,
             token: token,
-            operation: .publishSpell
+            operation: .saveRuleDraft
         )
         return response.spell
     }
 
+    func saveRuleDraft(spell: Spell, token: String) async throws -> Spell {
+        guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
+            return try await createRuleDraft(spell: spell, token: token)
+        }
+
+        let body = RuleDraftBody(spell: spell)
+        let response: SpellEnvelope = try await send(
+            path: "/api/rules/\(uid.spellbookPathComponent)/draft",
+            method: "PATCH",
+            body: body,
+            token: token,
+            operation: .saveRuleDraft
+        )
+        return response.spell
+    }
+
+    func submitRuleDraft(uid: String, version: Int, token: String) async throws -> Spell {
+        let response: SpellEnvelope = try await send(
+            path: "/api/rules/\(uid.spellbookPathComponent)/submit",
+            method: "POST",
+            body: Optional<String>.none,
+            token: token,
+            operation: .submitRuleDraft
+        )
+        return response.spell
+    }
+
+    func finishRule(uid: String, version: Int, token: String) async throws -> Spell {
+        let rule = try await publicRule(uid: uid, version: version, token: token)
+        guard rule.lifecycleState == .approved else {
+            throw SpellbookError.message("This rule is not approved yet.")
+        }
+        return rule
+    }
+
+    func publicPacks(token: String? = nil) async throws -> [RulePack] {
+        let response: PacksResponse = try await send(
+            path: "/api/packs/public?limit=100",
+            method: "GET",
+            body: Optional<String>.none,
+            token: token,
+            operation: .loadPublicPacks
+        )
+        return response.packs
+    }
+
     func delete(uid: String, token: String) async throws {
         let _: DeleteResponse = try await send(
-            path: "/api/spells/\(uid)",
+            path: "/api/rules/\(uid.spellbookPathComponent)",
             method: "DELETE",
             body: Optional<String>.none,
             token: token,
@@ -99,7 +165,7 @@ final class SpellbookAPI {
 
     func setStarred(uid: String, starred: Bool, token: String) async throws -> Spell {
         let response: SpellEnvelope = try await send(
-            path: "/api/spells/\(uid)/star",
+            path: "/api/rules/\(uid.spellbookPathComponent)/star",
             method: starred ? "POST" : "DELETE",
             body: Optional<String>.none,
             token: token,
@@ -109,6 +175,10 @@ final class SpellbookAPI {
     }
 
     func dynamicSpellLink(uid: String) -> URL {
+        dynamicRuleLink(uid: uid)
+    }
+
+    func dynamicRuleLink(uid: String) -> URL {
         baseURL.spellbookAPIURL(path: "/open/\(uid.spellbookPathComponent)")
     }
 
@@ -166,7 +236,8 @@ final class SpellbookAPI {
 
     private func isMissingPublishedSpellResponse(_ data: Data) -> Bool {
         let response = try? decoder.decode(APIErrorResponse.self, from: data)
-        return response?.error.trimmingCharacters(in: .whitespacesAndNewlines) == "Spell not found."
+        let error = response?.error.trimmingCharacters(in: .whitespacesAndNewlines)
+        return error == "Spell not found." || error == "Rule not found."
     }
 
     private func productSafeError(from data: Data, statusCode: Int, operation: SpellbookAPIOperation) -> String {
@@ -208,8 +279,13 @@ private enum SpellbookAPIOperation {
     case requestSignInCode
     case verifySignInCode
     case loadPublishedSpells
-    case loadMySpells
+    case loadPublicRules
+    case loadMyRules
+    case loadPublicPacks
     case publishSpell
+    case saveRuleDraft
+    case submitRuleDraft
+    case finishRule
     case deleteSpell
     case starSpell
     case unstarSpell
@@ -221,15 +297,25 @@ private enum SpellbookAPIOperation {
         case .verifySignInCode:
             return "Could not verify the sign-in code."
         case .loadPublishedSpells:
-            return "Could not load published spells."
-        case .loadMySpells:
-            return "Could not load your published spells."
+            return "Could not load published rules."
+        case .loadPublicRules:
+            return "Could not load public rules."
+        case .loadMyRules:
+            return "Could not load your rules."
+        case .loadPublicPacks:
+            return "Could not load packs."
         case .publishSpell:
-            return "Could not publish this spell."
+            return "Could not save this rule."
+        case .saveRuleDraft:
+            return "Could not save this rule draft."
+        case .submitRuleDraft:
+            return "Could not submit this rule for review."
+        case .finishRule:
+            return "Could not finish this rule."
         case .deleteSpell:
-            return "Could not delete this spell."
+            return "Could not delete this rule."
         case .starSpell:
-            return "Could not star this spell."
+            return "Could not star this rule."
         case .unstarSpell:
             return "Could not remove your star."
         }
@@ -242,15 +328,25 @@ private enum SpellbookAPIOperation {
         case .verifySignInCode:
             return "verifying sign-in codes"
         case .loadPublishedSpells:
-            return "loading published spells"
-        case .loadMySpells:
-            return "loading your spells"
+            return "loading published rules"
+        case .loadPublicRules:
+            return "loading public rules"
+        case .loadMyRules:
+            return "loading your rules"
+        case .loadPublicPacks:
+            return "loading packs"
         case .publishSpell:
-            return "publishing spells"
+            return "saving rules"
+        case .saveRuleDraft:
+            return "saving rule drafts"
+        case .submitRuleDraft:
+            return "submitting rule drafts"
+        case .finishRule:
+            return "finishing rules"
         case .deleteSpell:
-            return "deleting spells"
+            return "deleting rules"
         case .starSpell:
-            return "starring spells"
+            return "starring rules"
         case .unstarSpell:
             return "removing stars"
         }
@@ -270,10 +366,46 @@ private struct VerifyOTPResponse: Decodable {
 
 private struct SpellsResponse: Decodable {
     var spells: [Spell]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        spells = try container.decodeIfPresent([Spell].self, forKey: .rules)
+            ?? container.decodeIfPresent([Spell].self, forKey: .spells)
+            ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case rules
+        case spells
+    }
 }
 
 private struct SpellEnvelope: Decodable {
     var spell: Spell
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        spell = try container.decodeIfPresent(Spell.self, forKey: .rule)
+            ?? container.decode(Spell.self, forKey: .spell)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case rule
+        case spell
+    }
+}
+
+private struct PacksResponse: Decodable {
+    var packs: [RulePack]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        packs = try container.decodeIfPresent([RulePack].self, forKey: .packs) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case packs
+    }
 }
 
 private struct DeleteResponse: Decodable {
@@ -285,30 +417,39 @@ private struct APIErrorResponse: Decodable {
     var requestId: String?
 }
 
-private struct PublishSpellBody: Encodable {
+private struct RuleDraftBody: Encodable {
     var uid: String?
     var name: String
     var description: String
-    var trigger: String
+    var appliesWhen: String
     var file: String
-    var content: String
+    var body: String
 
     init(spell: Spell) {
         uid = spell.uid
         name = spell.name
         description = spell.description
-        trigger = spell.trigger
-        file = PublishSpellBody.normalizedFilePath(for: spell)
-        content = spell.content ?? ""
+        appliesWhen = spell.trigger
+        file = RuleDraftBody.normalizedFilePath(for: spell)
+        body = spell.content ?? ""
     }
 
     private static func normalizedFilePath(for spell: Spell) -> String {
         let file = spell.file.trimmingCharacters(in: .whitespacesAndNewlines)
-        if file.hasPrefix("instructions/"), !file.contains(".."), file.hasSuffix(".md") {
+        if file == "SPEC.md" || (!file.hasPrefix("/") && !file.contains("..") && file.hasSuffix(".md")) {
             return file
         }
 
-        return "instructions/\(Spell.slug(for: spell.name)).md"
+        return "SPEC.md"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case uid
+        case name
+        case description
+        case appliesWhen
+        case file
+        case body
     }
 }
 

@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://spellbook.raddus.dev/schemas/targets.schema.json",
-  "title": "Spellbook Known Targets Registry",
+  "title": "Spellbook Known Workspaces Registry",
+  "description": "Compatibility schema for ~/.spellbook/registry/targets.json. Product copy should say workspace; the file name remains targets.json during migration.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "targets"],

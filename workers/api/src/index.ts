@@ -1,18 +1,53 @@
 import {
-  authenticate,
-  authenticateOptional,
+  authenticateOptionalUser,
+  authenticateUser,
   constantTimeEqual,
+  ensureUser,
   generateOtpCode,
   hashOtp,
-  jwtExpiresAt,
   normalizeEmail,
-  otpExpiresAt,
-  randomToken,
+  requireAdminUser,
   requireSecret,
+  randomToken,
   signJwt
 } from "./auth";
+import { requireDatabase, type SpellbookEnv } from "./db";
 import { AppError, json, jsonError, optionsResponse, readJsonObject } from "./http";
-import { parseSpellInput, rowToSpell, rowsToSpells, type SpellRow } from "./spells";
+import {
+  createPack,
+  getPackDraft,
+  getPackVersion,
+  listMyPacks,
+  listPublicPacks,
+  submitPackDraft,
+  updatePackDraft
+} from "./packs";
+import {
+  listReviewQueue,
+  parseReviewVersion,
+  reviewPack,
+  reviewRule
+} from "./reviews";
+import {
+  createRule,
+  getLatestPublicRule,
+  getRuleDraft,
+  getRuleVersion,
+  listMyRules,
+  listPublicRules,
+  setRuleStar,
+  submitRuleDraft,
+  updateRuleDraft
+} from "./rules";
+import {
+  deleteSpell,
+  getPublicSpell,
+  getPublicSpellVersion,
+  listMySpells,
+  listPublicSpells,
+  setSpellStar,
+  upsertSpell
+} from "./spells";
 
 type OtpRow = {
   id: string;
@@ -23,19 +58,6 @@ type OtpRow = {
   consumed_at: string | null;
   created_at: string;
 };
-
-type SpellbookSecrets = {
-  SPELLBOOK_JWT_SECRET?: string;
-  RESEND_API_KEY?: string;
-  RESEND_FROM_EMAIL?: string;
-};
-
-type SpellbookConfig = {
-  SPELLBOOK_WEB_URL?: string;
-  SPELLBOOK_MACOS_DEEPLINK_SCHEME?: string;
-};
-
-type SpellbookEnv = Env & SpellbookSecrets & SpellbookConfig;
 
 const DEFAULT_SPELLBOOK_WEB_URL = "https://spellbook.raddus.dev/";
 const DEFAULT_SPELLBOOK_MACOS_SCHEME = "spellbook";
@@ -50,8 +72,7 @@ export default {
     const requestId = crypto.randomUUID();
 
     try {
-      const response = await route(request, env, ctx, url);
-      return response;
+      return await route(request, env, ctx, url);
     } catch (error) {
       if (error instanceof AppError) {
         if (error.status >= 500) {
@@ -85,30 +106,157 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
     return verifyOtp(request, env);
   }
 
+  if (request.method === "GET" && url.pathname === "/api/rules/public") {
+    const user = await authenticateOptionalUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return listPublicRules(env, url, user?.email ?? null);
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/rules/mine") {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return listMyRules(env, user);
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/rules") {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return createRule(request, env, user);
+  }
+
+  const ruleDraftMatch = url.pathname.match(/^\/api\/rules\/([^/]+)\/draft$/);
+  if (ruleDraftMatch?.[1]) {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    if (request.method === "GET") {
+      return getRuleDraft(env, user, decodeURIComponent(ruleDraftMatch[1]));
+    }
+    if (request.method === "PATCH") {
+      return updateRuleDraft(request, env, user, decodeURIComponent(ruleDraftMatch[1]));
+    }
+  }
+
+  const ruleSubmitMatch = url.pathname.match(/^\/api\/rules\/([^/]+)\/submit$/);
+  if (request.method === "POST" && ruleSubmitMatch?.[1]) {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return submitRuleDraft(env, user, decodeURIComponent(ruleSubmitMatch[1]));
+  }
+
+  const ruleVersionMatch = url.pathname.match(/^\/api\/rules\/([^/]+)\/versions\/(\d+)$/);
+  if (request.method === "GET" && ruleVersionMatch?.[1] && ruleVersionMatch?.[2]) {
+    const user = await authenticateOptionalUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return getRuleVersion(
+      env,
+      decodeURIComponent(ruleVersionMatch[1]),
+      Number(ruleVersionMatch[2]),
+      user?.email ?? null
+    );
+  }
+
+  const ruleStarMatch = url.pathname.match(/^\/api\/rules\/([^/]+)\/star$/);
+  if ((request.method === "POST" || request.method === "DELETE") && ruleStarMatch?.[1]) {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return setRuleStar(env, decodeURIComponent(ruleStarMatch[1]), user, request.method === "POST");
+  }
+
+  const ruleMatch = url.pathname.match(/^\/api\/rules\/([^/]+)$/);
+  if (request.method === "GET" && ruleMatch?.[1]) {
+    const user = await authenticateOptionalUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return getLatestPublicRule(env, decodeURIComponent(ruleMatch[1]), user?.email ?? null);
+  }
+  if (request.method === "DELETE" && ruleMatch?.[1]) {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return deleteSpell(env, decodeURIComponent(ruleMatch[1]), user);
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/packs/public") {
+    return listPublicPacks(env, url);
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/packs/mine") {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return listMyPacks(env, user);
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/packs") {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return createPack(request, env, user);
+  }
+
+  const packDraftMatch = url.pathname.match(/^\/api\/packs\/([^/]+)\/draft$/);
+  if (packDraftMatch?.[1]) {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    if (request.method === "GET") {
+      return getPackDraft(env, user, decodeURIComponent(packDraftMatch[1]));
+    }
+    if (request.method === "PATCH") {
+      return updatePackDraft(request, env, user, decodeURIComponent(packDraftMatch[1]));
+    }
+  }
+
+  const packSubmitMatch = url.pathname.match(/^\/api\/packs\/([^/]+)\/submit$/);
+  if (request.method === "POST" && packSubmitMatch?.[1]) {
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return submitPackDraft(env, user, decodeURIComponent(packSubmitMatch[1]));
+  }
+
+  const packVersionMatch = url.pathname.match(/^\/api\/packs\/([^/]+)\/versions\/(\d+)$/);
+  if (request.method === "GET" && packVersionMatch?.[1] && packVersionMatch?.[2]) {
+    const user = await authenticateOptionalUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return getPackVersion(env, decodeURIComponent(packVersionMatch[1]), Number(packVersionMatch[2]), user);
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/admin/reviews") {
+    await requireAdminUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return listReviewQueue(env);
+  }
+
+  const adminRuleReviewMatch = url.pathname.match(/^\/api\/admin\/rules\/([^/]+)\/versions\/(\d+)\/(approve|needs-changes)$/);
+  if (request.method === "POST" && adminRuleReviewMatch?.[1] && adminRuleReviewMatch?.[2] && adminRuleReviewMatch?.[3]) {
+    const admin = await requireAdminUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return reviewRule(
+      request,
+      env,
+      admin,
+      decodeURIComponent(adminRuleReviewMatch[1]),
+      parseReviewVersion(adminRuleReviewMatch[2]),
+      adminRuleReviewMatch[3] === "approve" ? "approved" : "needs_changes"
+    );
+  }
+
+  const adminPackReviewMatch = url.pathname.match(/^\/api\/admin\/packs\/([^/]+)\/versions\/(\d+)\/(approve|needs-changes)$/);
+  if (request.method === "POST" && adminPackReviewMatch?.[1] && adminPackReviewMatch?.[2] && adminPackReviewMatch?.[3]) {
+    const admin = await requireAdminUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return reviewPack(
+      request,
+      env,
+      admin,
+      decodeURIComponent(adminPackReviewMatch[1]),
+      parseReviewVersion(adminPackReviewMatch[2]),
+      adminPackReviewMatch[3] === "approve" ? "approved" : "needs_changes"
+    );
+  }
+
   if (request.method === "GET" && url.pathname === "/api/spells/public") {
-    const user = await authenticateOptional(request, env.SPELLBOOK_JWT_SECRET);
+    const user = await authenticateOptionalUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
     return listPublicSpells(env, url, user?.email ?? null);
   }
 
   if (request.method === "GET" && url.pathname === "/api/spells/mine") {
-    const user = await authenticate(request, env.SPELLBOOK_JWT_SECRET);
-    return listMine(env, user.email);
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return listMySpells(env, user);
   }
 
   if (request.method === "POST" && url.pathname === "/api/spells") {
-    const user = await authenticate(request, env.SPELLBOOK_JWT_SECRET);
-    return upsertSpell(request, env, user.email);
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return upsertSpell(request, env, user);
   }
 
   const starMatch = url.pathname.match(/^\/api\/spells\/([^/]+)\/star$/);
   if ((request.method === "POST" || request.method === "DELETE") && starMatch?.[1]) {
-    const user = await authenticate(request, env.SPELLBOOK_JWT_SECRET);
-    return setSpellStar(env, decodeURIComponent(starMatch[1]), user.email, request.method === "POST");
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return setSpellStar(env, decodeURIComponent(starMatch[1]), user, request.method === "POST");
   }
 
   const spellVersionMatch = url.pathname.match(/^\/api\/spells\/([^/]+)\/versions\/(\d+)$/);
   if (request.method === "GET" && spellVersionMatch?.[1] && spellVersionMatch?.[2]) {
-    const user = await authenticateOptional(request, env.SPELLBOOK_JWT_SECRET);
+    const user = await authenticateOptionalUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
     return getPublicSpellVersion(
       env,
       decodeURIComponent(spellVersionMatch[1]),
@@ -119,13 +267,13 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
 
   const spellMatch = url.pathname.match(/^\/api\/spells\/([^/]+)$/);
   if (request.method === "GET" && spellMatch?.[1]) {
-    const user = await authenticateOptional(request, env.SPELLBOOK_JWT_SECRET);
+    const user = await authenticateOptionalUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
     return getPublicSpell(env, decodeURIComponent(spellMatch[1]), user?.email ?? null);
   }
 
   if (request.method === "DELETE" && spellMatch?.[1]) {
-    const user = await authenticate(request, env.SPELLBOOK_JWT_SECRET);
-    return deleteSpell(env, decodeURIComponent(spellMatch[1]), user.email);
+    const user = await authenticateUser(request, env.SPELLBOOK_JWT_SECRET, requireDatabase(env));
+    return deleteSpell(env, decodeURIComponent(spellMatch[1]), user);
   }
 
   return jsonError("That Spellbook endpoint was not found.", 404);
@@ -173,7 +321,7 @@ async function requestOtp(request: Request, env: SpellbookEnv, ctx: ExecutionCon
   const code = generateOtpCode();
   const salt = randomToken(18);
   const now = new Date().toISOString();
-  const expiresAt = otpExpiresAt();
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
   const codeHash = await hashOtp(email, code, salt, jwtSecret);
 
   await db.prepare(
@@ -224,294 +372,9 @@ async function verifyOtp(request: Request, env: SpellbookEnv): Promise<Response>
     .bind(new Date().toISOString(), challenge.id)
     .run();
 
+  const user = await ensureUser(db, email);
   const session = await signJwt(email, jwtSecret);
-  return json({ token: session.token, email, expiresAt: session.expiresAt });
-}
-
-async function listPublicSpells(env: SpellbookEnv, url: URL, viewerEmail: string | null): Promise<Response> {
-  const db = requireDatabase(env);
-  const limit = parseLimit(url.searchParams.get("limit"));
-  const result = await db.prepare(
-    `SELECT id, name, description, trigger, file, content, version, owner_email,
-            published, created_at, updated_at, published_at,
-            (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
-            CASE
-              WHEN ? IS NOT NULL AND EXISTS (
-                SELECT 1 FROM spell_stars
-                WHERE spell_stars.spell_id = spells.id AND spell_stars.owner_email = ?
-              )
-              THEN 1
-              ELSE 0
-            END AS starred_by_viewer
-     FROM spells
-     WHERE published = 1
-     ORDER BY updated_at DESC
-     LIMIT ?`
-  )
-    .bind(viewerEmail, viewerEmail, limit)
-    .all<SpellRow>();
-
-  return json({ spells: rowsToSpells(result.results) });
-}
-
-async function listMine(env: SpellbookEnv, ownerEmail: string): Promise<Response> {
-  const db = requireDatabase(env);
-  const result = await db.prepare(
-    `SELECT id, name, description, trigger, file, content, version, owner_email,
-            published, created_at, updated_at, published_at,
-            (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
-            CASE
-              WHEN EXISTS (
-                SELECT 1 FROM spell_stars
-                WHERE spell_stars.spell_id = spells.id AND spell_stars.owner_email = ?
-              )
-              THEN 1
-              ELSE 0
-            END AS starred_by_viewer
-     FROM spells
-     WHERE owner_email = ?
-     ORDER BY updated_at DESC`
-  )
-    .bind(ownerEmail, ownerEmail)
-    .all<SpellRow>();
-
-  return json({ spells: rowsToSpells(result.results) });
-}
-
-async function getPublicSpell(env: SpellbookEnv, uid: string, viewerEmail: string | null): Promise<Response> {
-  const spell = await findSpellByUID(env, uid, viewerEmail);
-  if (!spell || spell.published !== 1) {
-    throw new AppError("Spell not found.", 404);
-  }
-
-  return json({ spell: rowToSpell(spell) });
-}
-
-async function getPublicSpellVersion(
-  env: SpellbookEnv,
-  uid: string,
-  version: number,
-  viewerEmail: string | null
-): Promise<Response> {
-  if (!Number.isInteger(version) || version < 1) {
-    throw new AppError("Spell not found.", 404);
-  }
-
-  const spell = await findSpellVersionByUID(env, uid, version, viewerEmail);
-  if (!spell || spell.published !== 1) {
-    throw new AppError("Spell not found.", 404);
-  }
-
-  return json({ spell: rowToSpell(spell) });
-}
-
-async function upsertSpell(request: Request, env: SpellbookEnv, ownerEmail: string): Promise<Response> {
-  const db = requireDatabase(env);
-  const input = parseSpellInput(await readJsonObject(request));
-  const now = new Date().toISOString();
-  const tagsJson = "[]";
-
-  if (input.uid) {
-    const existing = await findSpellByUID(env, input.uid);
-    if (!existing) {
-      throw new AppError("Spell not found.", 404);
-    }
-
-    if (existing.owner_email !== ownerEmail) {
-      throw new AppError("Only the creator can update this spell.", 403);
-    }
-
-    const nextVersion = existing.version + 1;
-    await db.batch([
-      db.prepare(
-        `UPDATE spells
-         SET name = ?, description = ?, trigger = ?, file = ?, content = ?, tags_json = ?, version = ?, published = 1, updated_at = ?,
-             published_at = COALESCE(published_at, ?)
-         WHERE id = ?`
-      )
-        .bind(
-          input.name,
-          input.description,
-          input.trigger,
-          input.file,
-          input.content,
-          tagsJson,
-          nextVersion,
-          now,
-          now,
-          input.uid
-        ),
-      db.prepare(
-        `INSERT INTO spell_versions (
-           spell_id, version, name, description, trigger, file, content, tags_json, created_at
-         )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-        .bind(
-          input.uid,
-          nextVersion,
-          input.name,
-          input.description,
-          input.trigger,
-          input.file,
-          input.content,
-          tagsJson,
-          now
-        )
-    ]);
-
-    const updated = await findSpellByUID(env, input.uid, ownerEmail);
-    if (!updated) {
-      throw new AppError("Spell not found.", 404);
-    }
-
-    return json({ spell: rowToSpell(updated) });
-  }
-
-  const uid = crypto.randomUUID();
-  await db.batch([
-    db.prepare(
-      `INSERT INTO spells (
-         id, name, description, trigger, file, content, version, tags_json, owner_email,
-         published, created_at, updated_at, published_at
-       )
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?, ?, ?)`
-    )
-      .bind(
-        uid,
-        input.name,
-        input.description,
-        input.trigger,
-        input.file,
-        input.content,
-        tagsJson,
-        ownerEmail,
-        now,
-        now,
-        now
-      ),
-    db.prepare(
-      `INSERT INTO spell_versions (
-         spell_id, version, name, description, trigger, file, content, tags_json, created_at
-       )
-       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        uid,
-        input.name,
-        input.description,
-        input.trigger,
-        input.file,
-        input.content,
-        tagsJson,
-        now
-      )
-  ]);
-
-  const created = await findSpellByUID(env, uid, ownerEmail);
-  if (!created) {
-    throw new AppError("Spell not found.", 404);
-  }
-
-  return json({ spell: rowToSpell(created) }, { status: 201 });
-}
-
-async function deleteSpell(env: SpellbookEnv, uid: string, ownerEmail: string): Promise<Response> {
-  const db = requireDatabase(env);
-  const existing = await findSpellByUID(env, uid);
-  if (!existing) {
-    throw new AppError("Spell not found.", 404);
-  }
-
-  if (existing.owner_email !== ownerEmail) {
-    throw new AppError("Only the creator can delete this spell", 403);
-  }
-
-  await db.batch([
-    db.prepare("DELETE FROM spell_stars WHERE spell_id = ?").bind(uid),
-    db.prepare("DELETE FROM spell_versions WHERE spell_id = ?").bind(uid),
-    db.prepare("DELETE FROM spells WHERE id = ?").bind(uid)
-  ]);
-  return json({ ok: true });
-}
-
-async function setSpellStar(env: SpellbookEnv, uid: string, ownerEmail: string, starred: boolean): Promise<Response> {
-  const db = requireDatabase(env);
-  const existing = await findSpellByUID(env, uid, ownerEmail);
-  if (!existing) {
-    throw new AppError("Spell not found.", 404);
-  }
-
-  if (starred) {
-    await db.prepare(
-      `INSERT OR IGNORE INTO spell_stars (spell_id, owner_email, created_at)
-       VALUES (?, ?, ?)`
-    )
-      .bind(uid, ownerEmail, new Date().toISOString())
-      .run();
-  } else {
-    await db.prepare("DELETE FROM spell_stars WHERE spell_id = ? AND owner_email = ?")
-      .bind(uid, ownerEmail)
-      .run();
-  }
-
-  const updated = await findSpellByUID(env, uid, ownerEmail);
-  if (!updated) {
-    throw new AppError("Spell not found.", 404);
-  }
-
-  return json({ spell: rowToSpell(updated) });
-}
-
-async function findSpellByUID(env: SpellbookEnv, uid: string, viewerEmail: string | null = null): Promise<SpellRow | null> {
-  const db = requireDatabase(env);
-  return db.prepare(
-    `SELECT id, name, description, trigger, file, content, version, owner_email,
-            published, created_at, updated_at, published_at,
-            (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
-            CASE
-              WHEN ? IS NOT NULL AND EXISTS (
-                SELECT 1 FROM spell_stars
-                WHERE spell_stars.spell_id = spells.id AND spell_stars.owner_email = ?
-              )
-              THEN 1
-              ELSE 0
-            END AS starred_by_viewer
-     FROM spells
-     WHERE id = ?
-     LIMIT 1`
-  )
-    .bind(viewerEmail, viewerEmail, uid)
-    .first<SpellRow>();
-}
-
-async function findSpellVersionByUID(
-  env: SpellbookEnv,
-  uid: string,
-  version: number,
-  viewerEmail: string | null = null
-): Promise<SpellRow | null> {
-  const db = requireDatabase(env);
-  return db.prepare(
-    `SELECT spells.id, spell_versions.name, spell_versions.description, spell_versions.trigger,
-            spell_versions.file, spell_versions.content, spell_versions.version,
-            spells.owner_email, spells.published, spells.created_at, spells.updated_at, spells.published_at,
-            (SELECT COUNT(*) FROM spell_stars WHERE spell_stars.spell_id = spells.id) AS star_count,
-            CASE
-              WHEN ? IS NOT NULL AND EXISTS (
-                SELECT 1 FROM spell_stars
-                WHERE spell_stars.spell_id = spells.id AND spell_stars.owner_email = ?
-              )
-              THEN 1
-              ELSE 0
-            END AS starred_by_viewer
-     FROM spells
-     JOIN spell_versions ON spell_versions.spell_id = spells.id
-     WHERE spells.id = ? AND spell_versions.version = ?
-     LIMIT 1`
-  )
-    .bind(viewerEmail, viewerEmail, uid, version)
-    .first<SpellRow>();
+  return json({ token: session.token, email, role: user.role, expiresAt: session.expiresAt });
 }
 
 async function deleteExpiredOtpChallenges(env: SpellbookEnv): Promise<void> {
@@ -572,27 +435,6 @@ async function sendOtpEmail({
   }
 }
 
-function parseLimit(value: string | null): number {
-  if (!value) {
-    return 100;
-  }
-
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    return 100;
-  }
-
-  return Math.min(parsed, 100);
-}
-
-function requireDatabase(env: SpellbookEnv): D1Database {
-  if (!env.DB) {
-    throw new AppError("Spellbook database is not configured. Add the D1 DB binding and redeploy the Worker.", 503);
-  }
-
-  return env.DB;
-}
-
 function classifyUnexpectedError(error: unknown): AppError {
   const message = error instanceof Error ? error.message : String(error);
 
@@ -600,7 +442,7 @@ function classifyUnexpectedError(error: unknown): AppError {
     return new AppError("Spellbook database schema and API deployment are out of sync. Apply the remote D1 migrations, then redeploy the Worker.", 503);
   }
 
-  if (/SQLITE_ERROR|D1_ERROR/i.test(message)) {
+  if (/SQLITE_ERROR|D1_ERROR|constraint failed|immutable/i.test(message)) {
     return new AppError("Spellbook database request failed. Check the Worker logs with the request ID.", 503);
   }
 

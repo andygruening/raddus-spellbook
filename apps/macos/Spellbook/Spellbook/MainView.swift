@@ -1,27 +1,27 @@
 import SwiftUI
 
 enum SpellbookPage: String, CaseIterable, Identifiable {
-    case local
-    case projects
-    case published
+    case workspaces
+    case packs
+    case rules
     case settings
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .local: "Instructions"
-        case .projects: "Projects"
-        case .published: "Published"
+        case .workspaces: "Workspaces"
+        case .packs: "Packs"
+        case .rules: "Rules"
         case .settings: "Settings"
         }
     }
 
     var icon: String {
         switch self {
-        case .local: "tray.full"
-        case .projects: "folder"
-        case .published: "globe"
+        case .workspaces: "folder"
+        case .packs: "shippingbox"
+        case .rules: "tray.full"
         case .settings: "gearshape"
         }
     }
@@ -29,7 +29,7 @@ enum SpellbookPage: String, CaseIterable, Identifiable {
 
 struct MainView: View {
     @EnvironmentObject private var deepLinkModel: DeepLinkModel
-    @State private var selection: SpellbookPage? = .local
+    @State private var selection: SpellbookPage? = .workspaces
 
     var body: some View {
         NavigationSplitView {
@@ -46,11 +46,7 @@ struct MainView: View {
                 .padding(.vertical, 16)
 
                 VStack(alignment: .leading, spacing: 22) {
-                    sidebarSection("Explore", pages: [.published])
-
-                    sidebarSection("My Library", pages: [.projects, .local])
-
-                    sidebarSection("Other", pages: [.settings])
+                    sidebarSection("Spellbook", pages: [.workspaces, .packs, .rules, .settings])
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
@@ -59,25 +55,25 @@ struct MainView: View {
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
         } detail: {
-            switch selection ?? .local {
-            case .local:
-                LocalSpellsView()
-            case .projects:
+            switch selection ?? .workspaces {
+            case .workspaces:
                 ProjectsView()
-            case .published:
-                PublishedSpellsView()
+            case .packs:
+                PacksView()
+            case .rules:
+                LocalSpellsView()
             case .settings:
                 SettingsView()
             }
         }
         .onAppear {
             if deepLinkModel.pendingPublishedSpellID != nil {
-                selection = .published
+                selection = .rules
             }
         }
         .onChange(of: deepLinkModel.pendingPublishedSpellID) { spellID in
             if spellID != nil {
-                selection = .published
+                selection = .rules
             }
         }
     }

@@ -1,12 +1,12 @@
 # Raddus Spellbook
 
-Spellbook is a native macOS app and Cloudflare backend for installing reusable, versioned AI-agent instructions into local agent harnesses and sharing public spells through a hosted API.
+Spellbook is a native macOS app, web public library, and Cloudflare backend for creating reusable AI-agent rules, applying them to local workspaces, and sharing reviewed public rules and packs.
 
 ## Structure
 
 - `apps/macos/Spellbook` - native SwiftUI macOS app.
 - `workers/api` - TypeScript Cloudflare Worker API backed by D1.
-- `apps/web` - optional React TypeScript read-only web listing.
+- `apps/web` - React TypeScript public library and review surface.
 
 ## Testing
 
@@ -30,19 +30,19 @@ https://api.spellbook.raddus.dev/
 
 The app does not expose an editable API URL.
 
-## Dynamic Spell Links
+## Dynamic Links
 
-The Worker exposes dynamic spell links at:
+The Worker exposes dynamic links for public artifacts. During the ADR-0003 migration, existing spell links remain supported for compatibility:
 
 ```text
 https://api.spellbook.raddus.dev/open/<spell-id>
 ```
 
-macOS requests redirect to `spellbook://spell/<spell-id>`. Other requests redirect to the production web app at `/spell/<spell-id>` so the relevant public spell can open automatically.
+macOS requests redirect to the installed app. Other requests redirect to the production web app so the relevant public rule or pack can open automatically.
 
 ## Deploy The Web App
 
-The read-only web app deploys to Cloudflare Pages as the `spellbook` project. Create the Pages project once, then deploy production builds from the repo root:
+The web app deploys to Cloudflare Pages as the `spellbook` project. Create the Pages project once, then deploy production builds from the repo root:
 
 ```bash
 npm run deploy:web:create
@@ -57,40 +57,57 @@ For preview deployments, run:
 npm run deploy:web:preview
 ```
 
+## Product Model
+
+Spellbook uses these user-facing terms after ADR-0003:
+
+- **Workspace**: a local context where AI behavior applies. A workspace usually maps to a directory containing one or more harness files such as `AGENTS.md`, `AGENT.md`, or `CLAUDE.md`.
+- **Rule**: the atomic reusable behavior unit. A rule has a backend `uid`, versioned metadata, an "Applies when" condition, and a generated or advanced markdown rule body.
+- **Pack**: a reviewed public-library bundle of pinned rule versions. Installing a pack is a batch operation that adds or updates rules in a workspace; workspaces do not store pack installation state.
+- **Public library**: the web and app surfaces for latest approved public rules and packs. Older approved versions remain available by version history or direct links.
+
+Draft authoring is backend-owned. Creating a rule or pack draft requires sign-in, assigns the backend `uid` immediately, and stores mutable draft content in the backend. Local offline draft authoring under `~/.spellbook/drafts` is out of scope.
+
 ## Local Agent Context Files
 
-Each target directory uses the selected harness files, such as `AGENTS.md`, `AGENT.md`, or `CLAUDE.md`, as the target-level source of truth. The macOS app writes one managed Spellbook block into each selected harness file:
+Each workspace directory uses the selected harness files, such as `AGENTS.md`, `AGENT.md`, or `CLAUDE.md`, as the workspace-level source of truth. The macOS app writes one managed Spellbook block into each selected harness file:
 
 ```md
 <!-- spellbook:start -->
-## Spellbook Instructions
+## Spellbook Rules
 
 The Spellbook app manages this block. Do not edit it by hand.
 
-For every task, check these Spellbook instruction triggers. When a trigger matches, read the linked `SPEC.md` and follow it. If a referenced file is missing or unreadable, report it in chat and continue without that Spellbook instruction.
+For every task, check these Spellbook rule conditions. When one applies, read the linked `SPEC.md` and follow it. If a referenced file is missing or unreadable, report it in chat and continue without that Spellbook rule.
 
-<!-- spellbook:instruction:start uid="server-id-after-publish" version="3" -->
-Trigger: when the instruction trigger applies.
-File: ~/.spellbook/instructions/server-id-after-publish/3/SPEC.md
+<!-- spellbook:instruction:start uid="server-id-after-draft" version="3" -->
+Applies when: when the rule condition applies.
+File: ~/.spellbook/rules/server-id-after-draft/3/SPEC.md
 <!-- spellbook:instruction:end -->
 
 <!-- spellbook:end -->
 ```
 
-The machine-local Spellbook store keeps the installed instruction metadata, known targets, and versioned `SPEC.md` bodies:
+The machine-local Spellbook store keeps installed rule metadata, known workspaces, and versioned `SPEC.md` bodies:
 
 ```text
 ~/.spellbook/
   registry/
     targets.json
-  instructions/
+  rules/
     <uid>/
       <version>/
         index.json
         SPEC.md
 ```
 
-Known targets use the selected root directory plus harness file names:
+The canonical local executable rule path is:
+
+```text
+~/.spellbook/rules/<uid>/<version>/SPEC.md
+```
+
+Known workspaces use the selected root directory plus harness file names. The compatibility file name remains `targets.json` during the migration:
 
 ```json
 {
@@ -104,11 +121,13 @@ Known targets use the selected root directory plus harness file names:
 }
 ```
 
-The app discovers locally installed instruction versions by scanning `~/.spellbook/instructions/<uid>/<version>/`. A version is complete only when both `index.json` and `SPEC.md` exist. Unpublished drafts stay private to the macOS app and cannot be installed into target harnesses until they are published or synced and have a backend `uid`.
+The app discovers locally installed rule versions by scanning `~/.spellbook/rules/<uid>/<version>/`. A version is complete only when both `index.json` and `SPEC.md` exist. Mutable backend draft versions may be installed by their creator; reinstalling a mutable draft overwrites the local rule body with the latest backend draft. Approved versions are immutable, and edits after approval create the next draft version for the same `uid`.
 
-JSON Schemas for instruction version indexes and known targets live in `docs/schemas/`.
+Existing content under `~/.spellbook/instructions` and `~/.spellbook/spells` is legacy-compatible data. The app may scan, migrate, or repair those layouts, but newly written harness entries and local executable bodies should use `~/.spellbook/rules`.
 
-The macOS app is sandboxed, but Spellbook intentionally resolves `~/.spellbook` to the real account home directory, not the app container. The app has a home-relative sandbox exception for `/.spellbook/` and has a Settings repair action that migrates UID-backed instructions from the older container-local store when needed.
+JSON Schemas for rule version indexes and known workspaces live in `docs/schemas/`.
+
+The macOS app is sandboxed, but Spellbook intentionally resolves `~/.spellbook` to the real account home directory, not the app container. The app has a home-relative sandbox exception for `/.spellbook/` and has a Settings repair action that migrates UID-backed legacy rule content from the older container-local store when needed.
 
 ## Run The macOS App
 

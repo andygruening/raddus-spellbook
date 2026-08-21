@@ -143,7 +143,7 @@ final class LocalSpellStore: ObservableObject {
     }
 
     var spellsURL: URL? {
-        SpellbookUserStoreLayout.instructionsDirectoryURL
+        SpellbookUserStoreLayout.rulesDirectoryURL
     }
 
     var latestSpells: [Spell] {
@@ -291,7 +291,7 @@ final class LocalSpellStore: ObservableObject {
         }
 
         guard let directoryURL = resolveDirectoryURL(for: target) else {
-            throw SpellbookError.message("Choose the target directory again before removing it.")
+            throw SpellbookError.message("Choose the workspace directory again before removing it.")
         }
 
         try InstructionManager.removeManagedBlocks(from: directoryURL, harnesses: target.harnesses)
@@ -304,9 +304,10 @@ final class LocalSpellStore: ObservableObject {
 
     func refresh() throws {
         try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.registryDirectoryURL, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.instructionsDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.rulesDirectoryURL, withIntermediateDirectories: true)
         try migrateLegacySystemRegistryIfNeeded()
         try migrateSandboxedSystemStoreIfNeeded()
+        try migrateLegacyInstalledRuleStoresIfNeeded()
         if !FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.targetsURL.path(percentEncoded: false)) {
             try writeKnownTargets()
         }
@@ -317,7 +318,7 @@ final class LocalSpellStore: ObservableObject {
         projectInstructionRefsByTargetID = projectState.refsByTargetID
         projectSpellsByTargetID = projectState.spellsByTargetID
         diagnostics = localScan.diagnostics + (try scanKnownTargets(systemSpells: spells))
-        statusMessage = "Loaded \(spells.count) installed instruction\(spells.count == 1 ? "" : "s")."
+        statusMessage = "Loaded \(spells.count) installed rule\(spells.count == 1 ? "" : "s")."
     }
 
     func repairSystemStore() throws {
@@ -327,7 +328,7 @@ final class LocalSpellStore: ObservableObject {
 
     func upsertLocal(_ spell: Spell) throws {
         guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
-            throw SpellbookError.message("Publish or sync this instruction before installing it locally.")
+            throw SpellbookError.message("Create or sync this rule before installing it locally.")
         }
 
         var incoming = spell
@@ -356,22 +357,22 @@ final class LocalSpellStore: ObservableObject {
         var installed = remoteSpell
         installed.ownerEmail = installed.ownerEmail ?? signedInEmail
         try upsertLocal(installed)
-        statusMessage = "Installed published instruction \(installed.name)."
+        statusMessage = "Installed rule \(installed.name)."
     }
 
     func removeLocal(_ spell: Spell) throws {
         guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
-            throw SpellbookError.message("Only published instructions can be removed from the local instruction store.")
+            throw SpellbookError.message("Only uid-backed rules can be removed from the local rule store.")
         }
 
         try refresh()
         let connectedTargets = projectTargets(containing: spell)
         guard connectedTargets.isEmpty else {
             let projectNames = connectedTargets.map(\.name).joined(separator: ", ")
-            throw SpellbookError.message("Remove this instruction from \(projectNames) before deleting its local files.")
+            throw SpellbookError.message("Remove this rule from \(projectNames) before deleting its local files.")
         }
 
-        let instructionDirectoryURL = SpellbookUserStoreLayout.instructionsDirectoryURL
+        let instructionDirectoryURL = SpellbookUserStoreLayout.rulesDirectoryURL
             .appending(path: SpellbookUserStoreLayout.safeStoragePathComponent(uid), directoryHint: .isDirectory)
         if FileManager.default.fileExists(atPath: instructionDirectoryURL.path(percentEncoded: false)) {
             try FileManager.default.removeItem(at: instructionDirectoryURL)
@@ -383,7 +384,7 @@ final class LocalSpellStore: ObservableObject {
 
     func createEmptyRegistryIfMissing() throws {
         try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.registryDirectoryURL, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.instructionsDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.rulesDirectoryURL, withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.targetsURL.path(percentEncoded: false)) {
             try writeKnownTargets()
         }
@@ -391,11 +392,11 @@ final class LocalSpellStore: ObservableObject {
 
     func addToTarget(_ spell: Spell, target: SpellbookTarget) throws {
         guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
-            throw SpellbookError.message("Publish or sync this instruction before adding it to a target.")
+            throw SpellbookError.message("Create or sync this rule before adding it to a workspace.")
         }
 
         guard let directoryURL = resolveDirectoryURL(for: target) else {
-            throw SpellbookError.message("Choose the project directory again before adding instructions.")
+            throw SpellbookError.message("Choose the workspace directory again before adding rules.")
         }
 
         try ensureLocalVersionIsComplete(uid: uid, version: spell.normalizedVersion)
@@ -412,12 +413,12 @@ final class LocalSpellStore: ObservableObject {
         try refresh()
         statusMessage = replacedExistingVersion
             ? "Updated \(spell.name) in \(target.name) to version \(spell.normalizedVersion)."
-            : inserted ? "Added \(spell.name) to \(target.name)." : "\(spell.name) is already installed in \(target.name)."
+            : inserted ? "Added \(spell.name) to \(target.name)." : "\(spell.name) is already added to \(target.name)."
     }
 
     func updateTargetInstruction(_ spell: Spell, target: SpellbookTarget) throws {
         guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
-            throw SpellbookError.message("That instruction is not uid-backed.")
+            throw SpellbookError.message("That rule is not uid-backed.")
         }
 
         guard let latestSpell = latestInstalledSpell(for: spell) else {
@@ -425,7 +426,7 @@ final class LocalSpellStore: ObservableObject {
         }
 
         guard let directoryURL = resolveDirectoryURL(for: target) else {
-            throw SpellbookError.message("Choose the project directory again before updating instructions.")
+            throw SpellbookError.message("Choose the workspace directory again before updating rules.")
         }
 
         try ensureLocalVersionIsComplete(uid: uid, version: latestSpell.normalizedVersion)
@@ -444,7 +445,7 @@ final class LocalSpellStore: ObservableObject {
         }
 
         guard updated else {
-            throw SpellbookError.message("That instruction is not installed in this project.")
+            throw SpellbookError.message("That rule is not installed in this workspace.")
         }
 
         try refresh()
@@ -453,11 +454,11 @@ final class LocalSpellStore: ObservableObject {
 
     func removeFromTarget(_ spell: Spell, target: SpellbookTarget) throws {
         guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
-            throw SpellbookError.message("That instruction is not installed in this target.")
+            throw SpellbookError.message("That rule is not installed in this workspace.")
         }
 
         guard let directoryURL = resolveDirectoryURL(for: target) else {
-            throw SpellbookError.message("Choose the project directory again before removing instructions.")
+            throw SpellbookError.message("Choose the workspace directory again before removing rules.")
         }
 
         var removed = false
@@ -467,11 +468,29 @@ final class LocalSpellStore: ObservableObject {
         }
 
         guard removed else {
-            throw SpellbookError.message("That instruction is not installed in this project.")
+            throw SpellbookError.message("That rule is not installed in this workspace.")
         }
 
         try refresh()
         statusMessage = "Removed \(spell.name) from \(target.name)."
+    }
+
+    func installedVersion(uid: String, in target: SpellbookTarget) -> Int? {
+        projectInstructionRefsByTargetID[target.id]?.first(where: { $0.uid == uid })?.version
+    }
+
+    func installPackRules(_ rules: [Spell], into target: SpellbookTarget) throws {
+        guard !rules.isEmpty else {
+            throw SpellbookError.message("This pack does not include any rules.")
+        }
+
+        for rule in rules {
+            try upsertLocal(rule)
+            try addToTarget(rule, target: target)
+        }
+
+        try refresh()
+        statusMessage = "Installed \(rules.count) rule\(rules.count == 1 ? "" : "s") in \(target.name)."
     }
 
     private func loadSystemRegistry() throws -> SpellRegistry {
@@ -534,7 +553,7 @@ final class LocalSpellStore: ObservableObject {
         let specURL = SpellbookUserStoreLayout.specURL(uid: uid, version: version)
         guard FileManager.default.fileExists(atPath: indexURL.path(percentEncoded: false)),
               FileManager.default.fileExists(atPath: specURL.path(percentEncoded: false)) else {
-            throw SpellbookError.message("Sync \(uid)@\(version) before installing it into a target.")
+            throw SpellbookError.message("Sync \(uid)@\(version) before adding it to a workspace.")
         }
     }
 
@@ -566,7 +585,7 @@ final class LocalSpellStore: ObservableObject {
 
     private func writeMetadata(for spell: Spell) throws {
         guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
-            throw SpellbookError.message("Only uid-backed instructions can be written to the system instruction store.")
+            throw SpellbookError.message("Only uid-backed rules can be written to the local rule store.")
         }
 
         let indexURL = SpellbookUserStoreLayout.instructionIndexURL(uid: uid, version: spell.normalizedVersion)
@@ -577,13 +596,13 @@ final class LocalSpellStore: ObservableObject {
 
     private func writeMarkdown(for spell: Spell) throws {
         guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
-            throw SpellbookError.message("Only uid-backed instructions can be written to the system instruction store.")
+            throw SpellbookError.message("Only uid-backed rules can be written to the local rule store.")
         }
 
         let markdownURL = SpellbookUserStoreLayout.specURL(uid: uid, version: spell.normalizedVersion)
         try FileManager.default.createDirectory(at: markdownURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-        let markdown = spell.content ?? "# \(spell.name)\n\n\(spell.description)\n\n## Trigger\n\n\(spell.trigger)\n"
+        let markdown = spell.content ?? "# \(spell.name)\n\n\(spell.description)\n\n## Applies When\n\n\(spell.trigger)\n"
         try markdown.write(to: markdownURL, atomically: true, encoding: .utf8)
     }
 
@@ -622,7 +641,7 @@ final class LocalSpellStore: ObservableObject {
         let now = ISO8601DateFormatter.spellbook.string(from: Date())
         var scannedSpells: [Spell] = []
         var scanDiagnostics: [SpellbookDiagnostic] = []
-        let rootURL = SpellbookUserStoreLayout.instructionsDirectoryURL
+        let rootURL = SpellbookUserStoreLayout.rulesDirectoryURL
 
         guard FileManager.default.fileExists(atPath: rootURL.path(percentEncoded: false)) else {
             return LocalInstructionScan(spells: [], diagnostics: [])
@@ -654,7 +673,7 @@ final class LocalSpellStore: ObservableObject {
 
                 guard hasIndex, hasSpec else {
                     scanDiagnostics.append(SpellbookDiagnostic(
-                        type: "incomplete_instruction_version",
+                        type: "incomplete_rule_version",
                         severity: "warning",
                         targetRoot: nil,
                         agent: nil,
@@ -675,7 +694,7 @@ final class LocalSpellStore: ObservableObject {
                     spell.file = ""
                     if spell.normalizedVersion != pathVersion {
                         scanDiagnostics.append(SpellbookDiagnostic(
-                            type: "instruction_metadata_mismatch",
+                        type: "rule_metadata_mismatch",
                             severity: "warning",
                             targetRoot: nil,
                             agent: nil,
@@ -696,7 +715,7 @@ final class LocalSpellStore: ObservableObject {
                     scannedSpells.append(spell)
                 } catch {
                     scanDiagnostics.append(SpellbookDiagnostic(
-                        type: "malformed_instruction_metadata",
+                        type: "malformed_rule_metadata",
                         severity: "warning",
                         targetRoot: nil,
                         agent: nil,
@@ -729,6 +748,79 @@ final class LocalSpellStore: ObservableObject {
             let registry = try loadRegistryIfExists(at: sourceURL)
             for spell in hydrate(registry.spells) {
                 try migrateLegacySpellIfComplete(spell)
+            }
+        }
+    }
+
+    private func migrateLegacyInstalledRuleStoresIfNeeded() throws {
+        let legacyRoots = [
+            SpellbookUserStoreLayout.instructionsDirectoryURL,
+            SpellbookUserStoreLayout.legacySpellsDirectoryURL
+        ]
+
+        for legacyRoot in legacyRoots where FileManager.default.fileExists(atPath: legacyRoot.path(percentEncoded: false)) {
+            let uidDirectories = try FileManager.default.contentsOfDirectory(
+                at: legacyRoot,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+
+            for uidDirectory in uidDirectories where uidDirectory.spellbookIsDirectory {
+                let pathUID = uidDirectory.lastPathComponent
+                let versionDirectories = try FileManager.default.contentsOfDirectory(
+                    at: uidDirectory,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                )
+
+                for versionDirectory in versionDirectories where versionDirectory.spellbookIsDirectory {
+                    guard let pathVersion = Int(versionDirectory.lastPathComponent), pathVersion > 0 else {
+                        continue
+                    }
+
+                    let indexURL = versionDirectory.appending(path: SpellbookUserStoreLayout.instructionIndexFileName)
+                    let specURL = versionDirectory.appending(path: SpellbookUserStoreLayout.specFileName)
+                    guard FileManager.default.fileExists(atPath: specURL.path(percentEncoded: false)) else {
+                        continue
+                    }
+
+                    let canonicalIndexURL = SpellbookUserStoreLayout.instructionIndexURL(uid: pathUID, version: pathVersion)
+                    let canonicalSpecURL = SpellbookUserStoreLayout.specURL(uid: pathUID, version: pathVersion)
+                    if FileManager.default.fileExists(atPath: canonicalIndexURL.path(percentEncoded: false)),
+                       FileManager.default.fileExists(atPath: canonicalSpecURL.path(percentEncoded: false)) {
+                        continue
+                    }
+
+                    let content = try String(contentsOf: specURL, encoding: .utf8)
+                    var spell: Spell
+                    if FileManager.default.fileExists(atPath: indexURL.path(percentEncoded: false)),
+                       let data = try? Data(contentsOf: indexURL),
+                       let decoded = try? JSONDecoder.spellbook.decode(Spell.self, from: data) {
+                        spell = decoded
+                    } else {
+                        spell = Spell(
+                            uid: pathUID,
+                            name: pathUID,
+                            description: "Migrated legacy rule.",
+                            trigger: Spell.trigger(from: content) ?? "",
+                            content: content,
+                            version: pathVersion
+                        )
+                    }
+
+                    spell.uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? spell.uid : pathUID
+                    spell.localID = nil
+                    spell.file = ""
+                    spell.version = pathVersion
+                    spell.content = content
+                    if spell.trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        spell.trigger = Spell.trigger(from: content) ?? ""
+                    }
+
+                    rememberOwner(for: spell)
+                    try writeMetadata(for: spell)
+                    try writeMarkdown(for: spell)
+                }
             }
         }
     }
@@ -793,12 +885,16 @@ final class LocalSpellStore: ObservableObject {
 
     private func legacyMarkdownContent(for spell: Spell) -> String? {
         let storageID = spell.uid ?? spell.localID ?? Spell.slug(for: spell.name)
-        let legacyURL = SpellbookUserStoreLayout.legacySpecURL(storageID: storageID, version: spell.normalizedVersion)
-        guard FileManager.default.fileExists(atPath: legacyURL.path(percentEncoded: false)) else {
-            return spell.content
+        let candidateURLs = [
+            SpellbookUserStoreLayout.legacyInstructionSpecURL(uid: storageID, version: spell.normalizedVersion),
+            SpellbookUserStoreLayout.legacySpecURL(storageID: storageID, version: spell.normalizedVersion)
+        ]
+
+        for legacyURL in candidateURLs where FileManager.default.fileExists(atPath: legacyURL.path(percentEncoded: false)) {
+            return try? String(contentsOf: legacyURL, encoding: .utf8)
         }
 
-        return try? String(contentsOf: legacyURL, encoding: .utf8)
+        return spell.content
     }
 
     private func sandboxedMarkdownContent(for spell: Spell, sandboxRootURL: URL) -> String? {
@@ -817,6 +913,14 @@ final class LocalSpellStore: ObservableObject {
             .filter { !$0.isEmpty }
         storageIDs = Array(Set(storageIDs))
 
+        let rulesURLs = spell.uid.map { uid in
+            sandboxRootURL
+                .appending(path: SpellbookUserStoreLayout.rulesDirectoryName, directoryHint: .isDirectory)
+                .appending(path: SpellbookUserStoreLayout.safeStoragePathComponent(uid), directoryHint: .isDirectory)
+                .appending(path: "\(version)", directoryHint: .isDirectory)
+                .appending(path: SpellbookUserStoreLayout.specFileName)
+        }.map { [$0] } ?? []
+
         let instructionsURLs = spell.uid.map { uid in
             sandboxRootURL
                 .appending(path: SpellbookUserStoreLayout.instructionsDirectoryName, directoryHint: .isDirectory)
@@ -833,7 +937,7 @@ final class LocalSpellStore: ObservableObject {
                 .appending(path: SpellbookUserStoreLayout.specFileName)
         }
 
-        return instructionsURLs + legacyURLs
+        return rulesURLs + instructionsURLs + legacyURLs
     }
 
     private func scanKnownTargets(systemSpells: [Spell]) throws -> [SpellbookDiagnostic] {
@@ -852,14 +956,14 @@ final class LocalSpellStore: ObservableObject {
         for target in targets {
             let directoryExists = FileManager.default.fileExists(atPath: target.directoryPath)
             guard directoryExists else {
-                warnings.append(SpellbookDiagnostic(
-                    type: "stale_target",
+            warnings.append(SpellbookDiagnostic(
+                type: "stale_target",
                     severity: "warning",
                     targetRoot: target.directoryPath,
                     agent: nil,
                     uid: nil,
                     version: nil,
-                    message: "The target path no longer exists. Relink the target or remove it.",
+                message: "The workspace path no longer exists. Relink the workspace or remove it.",
                     detectedAt: now
                 ))
                 continue
@@ -873,7 +977,7 @@ final class LocalSpellStore: ObservableObject {
                     agent: nil,
                     uid: nil,
                     version: nil,
-                    message: "Spellbook cannot access the target directory. Choose it again in the app.",
+                    message: "Spellbook cannot access the workspace directory. Choose it again in the app.",
                     detectedAt: now
                 ))
                 continue
@@ -942,7 +1046,7 @@ final class LocalSpellStore: ObservableObject {
 
                 for duplicateUID in duplicateUIDs.sorted() {
                     warnings.append(SpellbookDiagnostic(
-                        type: "duplicate_instruction_entry",
+                        type: "duplicate_rule_entry",
                         severity: "warning",
                         targetRoot: target.directoryPath,
                         agent: harness.agent,
@@ -967,7 +1071,7 @@ final class LocalSpellStore: ObservableObject {
                         agent: harness.agent,
                         uid: nil,
                         version: nil,
-                        message: "\(harness.file)'s Spellbook block differs from the managed template or local instruction metadata.",
+                        message: "\(harness.file)'s Spellbook block differs from the managed template or local rule metadata.",
                         detectedAt: now
                     ))
                 }
@@ -976,13 +1080,13 @@ final class LocalSpellStore: ObservableObject {
                     let ref = entry.ref
                     if spellsByRef[ref.id] == nil {
                         warnings.append(SpellbookDiagnostic(
-                            type: "missing_instruction_version",
+                            type: "missing_rule_version",
                             severity: "warning",
                             targetRoot: target.directoryPath,
                             agent: harness.agent,
                             uid: ref.uid,
                             version: ref.version,
-                            message: "Target references \(ref.uid)@\(ref.version), but that complete local version is not installed.",
+                            message: "Workspace references \(ref.uid)@\(ref.version), but that complete local rule version is not installed.",
                             detectedAt: now
                         ))
                     }
@@ -990,13 +1094,13 @@ final class LocalSpellStore: ObservableObject {
                     let indexURL = SpellbookUserStoreLayout.instructionIndexURL(uid: ref.uid, version: ref.version)
                     if !FileManager.default.fileExists(atPath: indexURL.path(percentEncoded: false)) {
                         warnings.append(SpellbookDiagnostic(
-                            type: "missing_instruction_metadata",
+                            type: "missing_rule_metadata",
                             severity: "warning",
                             targetRoot: target.directoryPath,
                             agent: harness.agent,
                             uid: ref.uid,
                             version: ref.version,
-                            message: "Target references \(ref.uid)@\(ref.version), but its index.json metadata is missing.",
+                            message: "Workspace references \(ref.uid)@\(ref.version), but its index.json metadata is missing.",
                             detectedAt: now
                         ))
                     }
@@ -1004,13 +1108,13 @@ final class LocalSpellStore: ObservableObject {
                     let specURL = SpellbookUserStoreLayout.specURL(uid: ref.uid, version: ref.version)
                     if !FileManager.default.fileExists(atPath: specURL.path(percentEncoded: false)) {
                         warnings.append(SpellbookDiagnostic(
-                            type: "missing_instruction_spec",
+                            type: "missing_rule_spec",
                             severity: "warning",
                             targetRoot: target.directoryPath,
                             agent: harness.agent,
                             uid: ref.uid,
                             version: ref.version,
-                            message: "Target references \(ref.uid)@\(ref.version), but its SPEC.md is missing.",
+                            message: "Workspace references \(ref.uid)@\(ref.version), but its SPEC.md is missing.",
                             detectedAt: now
                         ))
                     }
