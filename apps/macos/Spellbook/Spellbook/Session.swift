@@ -120,7 +120,7 @@ enum SpellbookError: LocalizedError {
         case .expiredSession:
             return "Your session expired. Sign in again."
         case .missingPublishedSpell:
-            return "That published spell no longer exists."
+            return "That public rule no longer exists."
         }
     }
 }

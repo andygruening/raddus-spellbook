@@ -3,6 +3,7 @@ import Foundation
 
 enum AgentContextLayout {
     static let packageDirectoryName = ".agent-context"
+    static let rulesDirectoryName = "rules"
     static let instructionsDirectoryName = "instructions"
     static let legacyRegistryFileName = "registry.json"
 
@@ -36,7 +37,10 @@ enum AgentContextLayout {
     static func canonicalInstructionFilePath(_ file: String) -> String {
         let trimmedFile = file.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedFile.hasPrefix("spells/") {
-            return "\(instructionsDirectoryName)/\(trimmedFile.dropFirst("spells/".count))"
+            return "\(rulesDirectoryName)/\(trimmedFile.dropFirst("spells/".count))"
+        }
+        if trimmedFile.hasPrefix("instructions/") {
+            return "\(rulesDirectoryName)/\(trimmedFile.dropFirst("instructions/".count))"
         }
         return trimmedFile
     }
@@ -45,6 +49,7 @@ enum AgentContextLayout {
 enum SpellbookUserStoreLayout {
     static let rootDirectoryName = ".spellbook"
     static let registryDirectoryName = "registry"
+    static let rulesDirectoryName = "rules"
     static let instructionsDirectoryName = "instructions"
     static let legacySpellsDirectoryName = "spells"
     static let legacySystemRegistryFileName = "registry.json"
@@ -97,12 +102,16 @@ enum SpellbookUserStoreLayout {
         rootURL.appending(path: instructionsDirectoryName, directoryHint: .isDirectory)
     }
 
+    static var rulesDirectoryURL: URL {
+        rootURL.appending(path: rulesDirectoryName, directoryHint: .isDirectory)
+    }
+
     static var legacySpellsDirectoryURL: URL {
         rootURL.appending(path: legacySpellsDirectoryName, directoryHint: .isDirectory)
     }
 
     static func instructionDirectoryURL(uid: String, version: Int) -> URL {
-        instructionsDirectoryURL
+        rulesDirectoryURL
             .appending(path: safeStoragePathComponent(uid), directoryHint: .isDirectory)
             .appending(path: "\(max(version, 1))", directoryHint: .isDirectory)
     }
@@ -116,7 +125,21 @@ enum SpellbookUserStoreLayout {
     }
 
     static func harnessSpecPath(uid: String, version: Int) -> String {
-        "~/\(rootDirectoryName)/\(instructionsDirectoryName)/\(safeStoragePathComponent(uid))/\(max(version, 1))/\(specFileName)"
+        "~/\(rootDirectoryName)/\(rulesDirectoryName)/\(safeStoragePathComponent(uid))/\(max(version, 1))/\(specFileName)"
+    }
+
+    static func legacyInstructionDirectoryURL(uid: String, version: Int) -> URL {
+        instructionsDirectoryURL
+            .appending(path: safeStoragePathComponent(uid), directoryHint: .isDirectory)
+            .appending(path: "\(max(version, 1))", directoryHint: .isDirectory)
+    }
+
+    static func legacyInstructionSpecURL(uid: String, version: Int) -> URL {
+        legacyInstructionDirectoryURL(uid: uid, version: version).appending(path: specFileName)
+    }
+
+    static func legacyInstructionIndexURL(uid: String, version: Int) -> URL {
+        legacyInstructionDirectoryURL(uid: uid, version: version).appending(path: instructionIndexFileName)
     }
 
     static func legacySpecURL(storageID: String, version: Int) -> URL {
@@ -137,7 +160,7 @@ enum SpellbookUserStoreLayout {
             .joined(separator: "-")
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
 
-        return collapsed.isEmpty ? "instruction" : collapsed
+        return collapsed.isEmpty ? "rule" : collapsed
     }
 }
 
@@ -204,7 +227,7 @@ enum InstructionManager {
 
     static func preview(selectedURL: URL?, preferredFileName: String) throws -> InstructionPreview {
         guard let selectedURL else {
-            throw SpellbookError.message("Choose a directory or instruction file first.")
+            throw SpellbookError.message("Choose a workspace directory or harness file first.")
         }
 
         let target = try targetInstructionURL(from: selectedURL, preferredFileName: preferredFileName)
@@ -220,8 +243,8 @@ enum InstructionManager {
             targetExists: targetExists,
             agent: harness.agent,
             managedInstructionCount: parseResult.entries.count,
-            instructionStoreURL: SpellbookUserStoreLayout.instructionsDirectoryURL,
-            instructionStoreExists: FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.instructionsDirectoryURL.path(percentEncoded: false)),
+            instructionStoreURL: SpellbookUserStoreLayout.rulesDirectoryURL,
+            instructionStoreExists: FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.rulesDirectoryURL.path(percentEncoded: false)),
             targetsURL: SpellbookUserStoreLayout.targetsURL,
             targetsExists: FileManager.default.fileExists(atPath: SpellbookUserStoreLayout.targetsURL.path(percentEncoded: false)),
             isInstalled: parseResult.hasManagedBlock,
@@ -248,7 +271,7 @@ enum InstructionManager {
         })
 
         try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.registryDirectoryURL, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.instructionsDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: SpellbookUserStoreLayout.rulesDirectoryURL, withIntermediateDirectories: true)
 
         for harness in harnesses {
             let targetInstructionURL = directoryURL.appending(path: harness.file)
@@ -290,7 +313,7 @@ enum InstructionManager {
 
     static func upsertInstruction(_ spell: Spell, in targetInstructionURL: URL) throws -> HarnessInstructionMutation {
         guard let uid = spell.uid?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty else {
-            throw SpellbookError.message("Only uid-backed instructions can be added to a harness.")
+            throw SpellbookError.message("Only uid-backed rules can be added to a harness.")
         }
 
         let existingContent = try? String(contentsOf: targetInstructionURL, encoding: .utf8)
@@ -371,8 +394,8 @@ enum InstructionManager {
             guard trimmedLine.hasPrefix(instructionStartPrefix) else {
                 if trimmedLine == instructionEndMarker {
                     issues.append(HarnessInstructionIssue(
-                        type: "malformed_instruction_entry",
-                        message: "Spellbook instruction end marker appears without a start marker.",
+                        type: "malformed_rule_entry",
+                        message: "Spellbook rule end marker appears without a start marker.",
                         uid: nil,
                         version: nil
                     ))
@@ -402,8 +425,8 @@ enum InstructionManager {
 
             guard let endIndex else {
                 issues.append(HarnessInstructionIssue(
-                    type: "malformed_instruction_entry",
-                    message: "Spellbook instruction start marker does not have a matching end marker.",
+                    type: "malformed_rule_entry",
+                    message: "Spellbook rule start marker does not have a matching end marker.",
                     uid: uid,
                     version: version
                 ))
@@ -415,8 +438,8 @@ enum InstructionManager {
                 entries.append(HarnessInstructionEntry(uid: uid, version: version, raw: raw))
             } else {
                 issues.append(HarnessInstructionIssue(
-                    type: "malformed_instruction_entry",
-                    message: "Spellbook instruction marker must include uid and positive integer version attributes.",
+                    type: "malformed_rule_entry",
+                    message: "Spellbook rule marker must include uid and positive integer version attributes.",
                     uid: uid,
                     version: version
                 ))
@@ -450,7 +473,7 @@ enum InstructionManager {
         let trigger = spell.trigger.trimmingCharacters(in: .whitespacesAndNewlines)
         return """
         \(instructionStartMarker(uid: uid, version: version))
-        Trigger: \(trigger)
+        Applies when: \(trigger)
         File: \(SpellbookUserStoreLayout.harnessSpecPath(uid: uid, version: version))
         \(instructionEndMarker)
         """
@@ -541,7 +564,7 @@ enum InstructionManager {
     private static func contentByReplacingManagedBlock(in content: String, with block: String) throws -> String {
         guard let range = managedBlockRange(in: content) else {
             if content.contains(startMarker) || content.contains(endMarker) {
-                throw SpellbookError.message("The instruction file has an incomplete Spellbook block.")
+                throw SpellbookError.message("The harness file has an incomplete Spellbook block.")
             }
 
             let separator = content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "\n\n"
@@ -554,7 +577,7 @@ enum InstructionManager {
     private static func contentByRemovingManagedBlock(from content: String) throws -> String {
         guard let range = managedBlockRange(in: content) else {
             if content.contains(startMarker) || content.contains(endMarker) {
-                throw SpellbookError.message("The instruction file has an incomplete Spellbook block.")
+                throw SpellbookError.message("The harness file has an incomplete Spellbook block.")
             }
 
             return content
@@ -590,11 +613,11 @@ enum InstructionManager {
     private static var managedBlockHeader: String {
         """
         \(startMarker)
-        ## Spellbook Instructions
+        ## Spellbook Rules
 
         The Spellbook app manages this block. Do not edit it by hand.
 
-        For every task, check these Spellbook instruction triggers. When a trigger matches, read the linked `SPEC.md` and follow it. If a referenced file is missing or unreadable, report it in chat and continue without that Spellbook instruction.
+        For every task, check these Spellbook rule triggers. When a trigger matches, read the linked `SPEC.md` and follow it. If a referenced file is missing or unreadable, report it in chat and continue without that Spellbook rule.
         """
     }
 
@@ -605,7 +628,7 @@ enum InstructionManager {
 
         return """
         \(instructionStartMarker(uid: entry.uid, version: entry.version))
-        Trigger: when this Spellbook instruction applies.
+        Applies when: when this Spellbook rule applies.
         File: \(SpellbookUserStoreLayout.harnessSpecPath(uid: entry.uid, version: entry.version))
         \(instructionEndMarker)
         """
@@ -650,7 +673,7 @@ enum InstructionManager {
 
     private static func throwIfUnrepairableIssues(_ issues: [HarnessInstructionIssue]) throws {
         guard issues.isEmpty else {
-            throw SpellbookError.message("The Spellbook managed block has malformed instruction markers. Repair the target before changing installed instructions.")
+            throw SpellbookError.message("The Spellbook managed block has malformed rule markers. Repair the workspace before changing installed rules.")
         }
     }
 }
