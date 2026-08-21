@@ -27,7 +27,7 @@ private struct WelcomeView: View {
             VStack(spacing: 10) {
                 Text("Raddus Spellbook")
                     .font(.system(size: 42, weight: .semibold))
-                Text("Spellbook installs versioned agent instructions into local projects and shares the ones you publish.")
+                Text("Spellbook installs versioned AI behavior rules into local workspaces and lets reviewed rules and packs be shared.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -38,8 +38,8 @@ private struct WelcomeView: View {
                 WelcomeWorkflowColumn(
                     title: "Capture",
                     steps: [
-                        "Create or install an instruction",
-                        "Publish it for a stable uid",
+                        "Create or install a rule",
+                        "Create a private draft for a stable uid",
                         "Keep a versioned SPEC.md snapshot"
                     ]
                 )
@@ -47,7 +47,7 @@ private struct WelcomeView: View {
                 WelcomeWorkflowColumn(
                     title: "Install",
                     steps: [
-                        "Choose a target directory",
+                        "Choose a workspace directory",
                         "Enable one or more harnesses",
                         "Pin uid and version references"
                     ]
@@ -56,9 +56,9 @@ private struct WelcomeView: View {
                 WelcomeWorkflowColumn(
                     title: "Share",
                     steps: [
-                        "Publish useful spells",
-                        "Send a public link",
-                        "Let others install them"
+                        "Submit useful rules",
+                        "Wait for review",
+                        "Share approved rules and packs"
                     ]
                 )
             }

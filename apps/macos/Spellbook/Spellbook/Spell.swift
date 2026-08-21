@@ -1,5 +1,40 @@
 import Foundation
 
+enum RuleLifecycleState: String, Codable, Equatable, CaseIterable {
+    case draft
+    case submitted
+    case needsChanges = "needs_changes"
+    case approved
+    case withdrawn
+    case archived
+
+    var label: String {
+        switch self {
+        case .draft:
+            return "Draft"
+        case .submitted:
+            return "Submitted for Review"
+        case .needsChanges:
+            return "Needs Changes"
+        case .approved:
+            return "Approved, ready to finish"
+        case .withdrawn:
+            return "Withdrawn"
+        case .archived:
+            return "Archived"
+        }
+    }
+
+    var isEditable: Bool {
+        switch self {
+        case .draft, .submitted, .needsChanges:
+            return true
+        case .approved, .withdrawn, .archived:
+            return false
+        }
+    }
+}
+
 struct Spell: Identifiable, Codable, Equatable {
     var uid: String?
     var localID: String?
@@ -13,6 +48,8 @@ struct Spell: Identifiable, Codable, Equatable {
     var publishedAt: String?
     var starCount: Int
     var starredByMe: Bool
+    var lifecycleState: RuleLifecycleState?
+    var reviewNotes: String?
 
     var id: String {
         if let uid {
@@ -41,7 +78,9 @@ struct Spell: Identifiable, Codable, Equatable {
         ownerEmail: String? = nil,
         publishedAt: String? = nil,
         starCount: Int = 0,
-        starredByMe: Bool = false
+        starredByMe: Bool = false,
+        lifecycleState: RuleLifecycleState? = nil,
+        reviewNotes: String? = nil
     ) {
         self.uid = uid
         self.localID = localID
@@ -55,36 +94,49 @@ struct Spell: Identifiable, Codable, Equatable {
         self.publishedAt = publishedAt
         self.starCount = starCount
         self.starredByMe = starredByMe
+        self.lifecycleState = lifecycleState
+        self.reviewNotes = reviewNotes
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedName = try container.decodeIfPresent(String.self, forKey: .name)
             ?? container.decodeIfPresent(String.self, forKey: .title)
-            ?? "Untitled spell"
+            ?? "Untitled rule"
         let decodedDescription = try container.decodeIfPresent(String.self, forKey: .description)
             ?? container.decodeIfPresent(String.self, forKey: .requirement)
-            ?? "Reusable review instruction."
+            ?? "Reusable AI behavior rule."
         let decodedContent = try container.decodeIfPresent(String.self, forKey: .content)
+            ?? container.decodeIfPresent(String.self, forKey: .markdown)
+            ?? container.decodeIfPresent(String.self, forKey: .body)
         let decodedTrigger = try container.decodeIfPresent(String.self, forKey: .trigger)
+            ?? container.decodeIfPresent(String.self, forKey: .appliesWhen)
             ?? decodedContent.flatMap { Spell.trigger(from: $0) }
 
         uid = try container.decodeIfPresent(String.self, forKey: .uid)
             ?? container.decodeIfPresent(String.self, forKey: .remoteId)
+            ?? container.decodeIfPresent(String.self, forKey: .ruleUid)
         localID = try container.decodeIfPresent(String.self, forKey: .localID)
             ?? container.decodeIfPresent(String.self, forKey: .localId)
         name = decodedName
         description = decodedDescription
         trigger = decodedTrigger ?? ""
         let decodedFile = try container.decodeIfPresent(String.self, forKey: .file)
-            ?? "\(AgentContextLayout.instructionsDirectoryName)/\(Spell.slug(for: decodedName)).md"
+            ?? "\(AgentContextLayout.rulesDirectoryName)/\(Spell.slug(for: decodedName)).md"
         file = AgentContextLayout.canonicalInstructionFilePath(decodedFile)
         content = decodedContent ?? Spell.legacyMarkdown(from: container, name: decodedName)
         version = max(try container.decodeIfPresent(Int.self, forKey: .version) ?? 1, 1)
         ownerEmail = try container.decodeIfPresent(String.self, forKey: .ownerEmail)
+            ?? container.decodeIfPresent(String.self, forKey: .creatorEmail)
         publishedAt = try container.decodeIfPresent(String.self, forKey: .publishedAt)
         starCount = try container.decodeIfPresent(Int.self, forKey: .starCount) ?? 0
         starredByMe = try container.decodeIfPresent(Bool.self, forKey: .starredByMe) ?? false
+        let decodedState = try container.decodeIfPresent(RuleLifecycleState.self, forKey: .lifecycleState)
+            ?? container.decodeIfPresent(RuleLifecycleState.self, forKey: .status)
+            ?? container.decodeIfPresent(RuleLifecycleState.self, forKey: .state)
+        lifecycleState = decodedState
+        reviewNotes = try container.decodeIfPresent(String.self, forKey: .reviewNotes)
+            ?? container.decodeIfPresent(String.self, forKey: .reviewNote)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -93,10 +145,17 @@ struct Spell: Identifiable, Codable, Equatable {
         try container.encode(name, forKey: .name)
         try container.encode(description, forKey: .description)
         try container.encode(trigger, forKey: .trigger)
+        try container.encode(trigger, forKey: .appliesWhen)
         if !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             try container.encode(file, forKey: .file)
         }
         try container.encode(normalizedVersion, forKey: .version)
+        try container.encodeIfPresent(ownerEmail, forKey: .ownerEmail)
+        try container.encodeIfPresent(publishedAt, forKey: .publishedAt)
+        try container.encode(starCount, forKey: .starCount)
+        try container.encode(starredByMe, forKey: .starredByMe)
+        try container.encodeIfPresent(lifecycleState, forKey: .lifecycleState)
+        try container.encodeIfPresent(reviewNotes, forKey: .reviewNotes)
     }
 
     func matchesForInstall(_ other: Spell) -> Bool {
@@ -142,7 +201,33 @@ struct Spell: Identifiable, Codable, Equatable {
     }
 
     static func trigger(from markdown: String) -> String? {
-        section(named: "Trigger", in: markdown)
+        section(named: "Applies When", in: markdown) ?? section(named: "Trigger", in: markdown)
+    }
+
+    static func generatedMarkdown(
+        name: String,
+        purpose: String,
+        appliesWhen: String,
+        desiredBehavior: String,
+        avoidedBehavior: String,
+        permissionBoundary: String,
+        examples: String
+    ) -> String {
+        var sections = [
+            "# \(name)",
+            "## Purpose\n\(purpose)",
+            "## Applies When\n\(appliesWhen)",
+            "## Desired Behavior\n\(desiredBehavior)",
+            "## Avoided Behavior\n\(avoidedBehavior)",
+            "## Permission Boundary\n\(permissionBoundary)"
+        ]
+
+        let trimmedExamples = examples.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedExamples.isEmpty {
+            sections.append("## Examples\n\(trimmedExamples)")
+        }
+
+        return sections.joined(separator: "\n\n") + "\n"
     }
 
     private func normalized(_ value: String) -> String {
@@ -217,21 +302,123 @@ struct Spell: Identifiable, Codable, Equatable {
         case description
         case file
         case content
+        case markdown
+        case body
         case version
         case ownerEmail
+        case creatorEmail
         case publishedAt
         case starCount
         case starredByMe
+        case lifecycleState = "lifecycle_state"
+        case status
+        case state
+        case reviewNotes = "review_notes"
+        case reviewNote = "review_note"
 
         case title
         case role
         case category
         case requirement
         case trigger
+        case appliesWhen = "applies_when"
         case safePath
         case sourceAgent
         case remoteId
+        case ruleUid = "rule_uid"
         case localId = "local_id"
+    }
+}
+
+struct PackRuleVersionRef: Identifiable, Decodable, Equatable, Hashable {
+    var uid: String
+    var version: Int
+    var name: String?
+    var description: String?
+
+    var id: String {
+        "\(uid)@\(max(version, 1))"
+    }
+
+    init(uid: String, version: Int, name: String? = nil, description: String? = nil) {
+        self.uid = uid
+        self.version = max(version, 1)
+        self.name = name
+        self.description = description
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        uid = try container.decodeIfPresent(String.self, forKey: .uid)
+            ?? container.decode(String.self, forKey: .ruleUid)
+        version = max(try container.decodeIfPresent(Int.self, forKey: .version) ?? 1, 1)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case uid
+        case ruleUid = "rule_uid"
+        case version
+        case name
+        case description
+    }
+}
+
+struct RulePack: Identifiable, Decodable, Equatable {
+    var uid: String
+    var version: Int
+    var name: String
+    var description: String
+    var includedRules: [PackRuleVersionRef]
+    var suggestedWorkspaceType: String?
+    var compatibility: String?
+    var lifecycleState: RuleLifecycleState?
+    var creatorEmail: String?
+    var changelog: String?
+    var reviewNotes: String?
+
+    var id: String {
+        "\(uid)@\(max(version, 1))"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        uid = try container.decodeIfPresent(String.self, forKey: .uid)
+            ?? container.decode(String.self, forKey: .packUid)
+        version = max(try container.decodeIfPresent(Int.self, forKey: .version) ?? 1, 1)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+            ?? container.decodeIfPresent(String.self, forKey: .title)
+            ?? "Untitled pack"
+        description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+        includedRules = try container.decodeIfPresent([PackRuleVersionRef].self, forKey: .includedRules)
+            ?? container.decodeIfPresent([PackRuleVersionRef].self, forKey: .rules)
+            ?? []
+        suggestedWorkspaceType = try container.decodeIfPresent(String.self, forKey: .suggestedWorkspaceType)
+        compatibility = try container.decodeIfPresent(String.self, forKey: .compatibility)
+        lifecycleState = try container.decodeIfPresent(RuleLifecycleState.self, forKey: .lifecycleState)
+            ?? container.decodeIfPresent(RuleLifecycleState.self, forKey: .status)
+        creatorEmail = try container.decodeIfPresent(String.self, forKey: .creatorEmail)
+        changelog = try container.decodeIfPresent(String.self, forKey: .changelog)
+        reviewNotes = try container.decodeIfPresent(String.self, forKey: .reviewNotes)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case uid
+        case packUid = "pack_uid"
+        case version
+        case name
+        case title
+        case description
+        case includedRules = "included_rules"
+        case rules
+        case suggestedWorkspaceType = "suggested_workspace_type"
+        case compatibility
+        case lifecycleState = "lifecycle_state"
+        case status
+        case creatorEmail = "creator_email"
+        case changelog
+        case reviewNotes = "review_notes"
     }
 }
 
