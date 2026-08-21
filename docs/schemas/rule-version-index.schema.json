@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spellbook.raddus.dev/schemas/rule-version-index.schema.json",
+  "title": "Spellbook Rule Version Index",
+  "description": "Metadata stored beside a local executable rule body at ~/.spellbook/rules/<uid>/<version>/index.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["uid", "version", "name", "description", "applies_when"],
+  "properties": {
+    "uid": {
+      "description": "Backend-owned stable rule identity assigned when the draft is created.",
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "description": "Rule version number. Mutable until approved, immutable after approval.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "applies_when": {
+      "description": "User-facing condition for when an agent should read and follow the rule.",
+      "type": "string",
+      "minLength": 1
+    },
+    "trigger": {
+      "description": "Legacy compatibility alias for applies_when while older clients migrate.",
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "description": "Backend lifecycle state when known locally.",
+      "enum": [
+        "draft",
+        "submitted_for_review",
+        "needs_changes",
+        "approved",
+        "withdrawn",
+        "archived"
+      ]
+    },
+    "file": {
+      "description": "Optional local rule body filename. Defaults to SPEC.md.",
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

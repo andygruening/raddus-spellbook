@@ -2,6 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://spellbook.raddus.dev/schemas/instruction-version-index.schema.json",
   "title": "Spellbook Instruction Version Index",
+  "description": "Legacy schema for metadata under ~/.spellbook/instructions/<uid>/<version>/index.json. New ADR-0003 writes should use rule-version-index.schema.json and ~/.spellbook/rules/<uid>/<version>/index.json.",
+  "deprecated": true,
   "type": "object",
   "additionalProperties": false,
   "required": ["uid", "version", "name", "description", "trigger"],
