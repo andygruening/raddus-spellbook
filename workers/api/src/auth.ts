@@ -17,6 +17,15 @@ export type AuthenticatedUser = {
   email: string;
 };
 
+export type UserRole = "user" | "admin";
+
+export type DatabaseUser = {
+  email: string;
+  role: UserRole;
+  created_at: string;
+  updated_at: string;
+};
+
 export function normalizeEmail(email: unknown): string {
   if (typeof email !== "string") {
     throw new AppError("Enter a valid email address.", 400);
@@ -151,6 +160,69 @@ export async function authenticateOptional(request: Request, secret: string | un
   return authenticate(request, secret);
 }
 
+export async function ensureUser(db: D1Database, email: string): Promise<DatabaseUser> {
+  const normalized = normalizeEmail(email);
+  const now = new Date().toISOString();
+
+  await db.prepare(
+    `INSERT INTO users (email, role, created_at, updated_at)
+     VALUES (?, 'user', ?, ?)
+     ON CONFLICT(email) DO UPDATE SET updated_at = excluded.updated_at`
+  )
+    .bind(normalized, now, now)
+    .run();
+
+  const user = await db.prepare(
+    `SELECT email, role, created_at, updated_at
+     FROM users
+     WHERE email = ?
+     LIMIT 1`
+  )
+    .bind(normalized)
+    .first<DatabaseUser>();
+
+  if (!user || !isUserRole(user.role)) {
+    throw new AppError("Sign in again to continue.", 401);
+  }
+
+  return user;
+}
+
+export async function authenticateUser(
+  request: Request,
+  secret: string | undefined,
+  db: D1Database
+): Promise<DatabaseUser> {
+  const session = await authenticate(request, secret);
+  return ensureUser(db, session.email);
+}
+
+export async function authenticateOptionalUser(
+  request: Request,
+  secret: string | undefined,
+  db: D1Database
+): Promise<DatabaseUser | null> {
+  const session = await authenticateOptional(request, secret);
+  if (!session) {
+    return null;
+  }
+
+  return ensureUser(db, session.email);
+}
+
+export async function requireAdminUser(
+  request: Request,
+  secret: string | undefined,
+  db: D1Database
+): Promise<DatabaseUser> {
+  const user = await authenticateUser(request, secret, db);
+  if (user.role !== "admin") {
+    throw new AppError("Admin access is required.", 403);
+  }
+
+  return user;
+}
+
 export function requireSecret(value: string | undefined, message: string): string {
   if (!value || value.trim().length === 0) {
     throw new AppError(message, 503);
@@ -183,6 +255,10 @@ function isJwtPayload(value: unknown): value is JwtPayload {
     typeof value.iat === "number" &&
     value.iss === "raddus-spellbook"
   );
+}
+
+function isUserRole(value: unknown): value is UserRole {
+  return value === "user" || value === "admin";
 }
 
 async function hmacSha256(message: string, secret: string): Promise<ArrayBuffer> {
