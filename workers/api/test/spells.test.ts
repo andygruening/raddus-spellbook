@@ -45,6 +45,19 @@ describe("spell helpers", () => {
     ).toThrow("Instruction files must live under ./instructions and end in .md.");
   });
 
+  it("rejects non-string spell IDs instead of creating a new spell", () => {
+    expect(() =>
+      parseSpellInput({
+        uid: 42,
+        name: "Malformed ID",
+        description: "Reject malformed update identifiers.",
+        trigger: "Use when validating spell updates.",
+        file: "instructions/malformed-id.md",
+        content: "# Malformed ID"
+      })
+    ).toThrow("Spell IDs must be strings.");
+  });
+
   it("rejects files outside the instructions directory", () => {
     expect(() =>
       parseSpellInput({
