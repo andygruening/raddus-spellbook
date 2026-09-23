@@ -74,7 +74,7 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
 
   const dynamicLinkMatch = url.pathname.match(/^\/open\/([^/]+)$/);
   if (request.method === "GET" && dynamicLinkMatch?.[1]) {
-    return redirectToSpell(request, env, decodeURIComponent(dynamicLinkMatch[1]));
+    return redirectToSpell(request, env, decodeSpellId(dynamicLinkMatch[1]));
   }
 
   if (request.method === "POST" && url.pathname === "/api/auth/request-otp") {
@@ -103,7 +103,7 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
   const starMatch = url.pathname.match(/^\/api\/spells\/([^/]+)\/star$/);
   if ((request.method === "POST" || request.method === "DELETE") && starMatch?.[1]) {
     const user = await authenticate(request, env.SPELLBOOK_JWT_SECRET);
-    return setSpellStar(env, decodeURIComponent(starMatch[1]), user.email, request.method === "POST");
+    return setSpellStar(env, decodeSpellId(starMatch[1]), user.email, request.method === "POST");
   }
 
   const spellVersionMatch = url.pathname.match(/^\/api\/spells\/([^/]+)\/versions\/(\d+)$/);
@@ -111,7 +111,7 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
     const user = await authenticateOptional(request, env.SPELLBOOK_JWT_SECRET);
     return getPublicSpellVersion(
       env,
-      decodeURIComponent(spellVersionMatch[1]),
+      decodeSpellId(spellVersionMatch[1]),
       Number(spellVersionMatch[2]),
       user?.email ?? null
     );
@@ -120,15 +120,23 @@ async function route(request: Request, env: SpellbookEnv, ctx: ExecutionContext,
   const spellMatch = url.pathname.match(/^\/api\/spells\/([^/]+)$/);
   if (request.method === "GET" && spellMatch?.[1]) {
     const user = await authenticateOptional(request, env.SPELLBOOK_JWT_SECRET);
-    return getPublicSpell(env, decodeURIComponent(spellMatch[1]), user?.email ?? null);
+    return getPublicSpell(env, decodeSpellId(spellMatch[1]), user?.email ?? null);
   }
 
   if (request.method === "DELETE" && spellMatch?.[1]) {
     const user = await authenticate(request, env.SPELLBOOK_JWT_SECRET);
-    return deleteSpell(env, decodeURIComponent(spellMatch[1]), user.email);
+    return deleteSpell(env, decodeSpellId(spellMatch[1]), user.email);
   }
 
   return jsonError("That Spellbook endpoint was not found.", 404);
+}
+
+function decodeSpellId(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new AppError("Spell not found.", 404);
+  }
 }
 
 function redirectToSpell(request: Request, env: SpellbookEnv, spellId: string): Response {

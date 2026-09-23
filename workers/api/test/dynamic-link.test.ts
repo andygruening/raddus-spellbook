@@ -47,6 +47,17 @@ describe("dynamic spell links", () => {
     expect(response.status).toBe(302);
     expect(response.headers.get("Location")).toBe("https://spellbook.example.com/spell/spell-123");
   });
+
+  it("returns not found for malformed percent-encoded spell IDs", async () => {
+    const response = await worker.fetch(
+      new Request("https://spellbook-api.example.com/open/%"),
+      testEnv(),
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Spell not found.", requestId: expect.any(String) });
+  });
 });
 
 function testEnv(): Env & {
